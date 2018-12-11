@@ -1,6 +1,7 @@
 use super::blob::*;
 use super::texture::{Texture, TextureKey};
 use crate::backend;
+use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
 use snoozy::*;
 
@@ -77,17 +78,50 @@ struct ShaderIncludeProvider<'a> {
 }
 
 impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider<'a> {
-    fn get_include(&mut self, path: &str) -> Result<String> {
-        let blob = self.ctx.get(&load_file("shaders/".to_string() + path))?;
-        String::from_utf8(blob.contents.clone()).map_err(|e| format_err!("{}", e))
+    type IncludeContext = AssetPath;
+
+    fn get_include(
+        &mut self,
+        path: &str,
+        include_context: &Self::IncludeContext,
+    ) -> Result<(String, Self::IncludeContext)> {
+        let asset_path: AssetPath = if let Some(crate_end) = path.find("::") {
+            let crate_name = path.chars().take(crate_end).collect();
+            let asset_name = path.chars().skip(crate_end + 2).collect();
+
+            AssetPath {
+                crate_name,
+                asset_name,
+            }
+        } else {
+            if let Some('/') = path.chars().next() {
+                AssetPath {
+                    crate_name: include_context.crate_name.clone(),
+                    asset_name: path.chars().skip(1).collect(),
+                }
+            } else {
+                let mut folder: RelativePathBuf = include_context.asset_name.clone().into();
+                folder.pop();
+                AssetPath {
+                    crate_name: include_context.crate_name.clone(),
+                    asset_name: folder.join(path).as_str().to_string(),
+                }
+            }
+        };
+
+        RelativePath::new(path);
+        let blob = self.ctx.get(&load_blob(asset_path.clone()))?;
+        String::from_utf8(blob.contents.clone())
+            .map_err(|e| format_err!("{}", e))
+            .map(|ok| (ok, asset_path))
     }
 }
 
 snoozy! {
-    fn load_cs(ctx: &mut Context, path: &String) -> Result<ComputeShader> {
-        let source = shader_prepper::process_file(&path, &mut ShaderIncludeProvider {
+    fn load_cs(ctx: &mut Context, path: &AssetPath) -> Result<ComputeShader> {
+        let source = shader_prepper::process_file(&path.asset_name, &mut ShaderIncludeProvider {
             ctx: ctx
-        })?;
+        }, AssetPath { crate_name: path.crate_name.clone(), asset_name: String::new() })?;
 
         let shader_handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
 

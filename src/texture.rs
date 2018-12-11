@@ -1,15 +1,15 @@
 pub use crate::backend::texture::{Texture, TextureKey};
 
 use crate::backend;
-use crate::blob::load_file;
+use crate::blob::{load_blob, AssetPath};
 
 use snoozy::*;
 
 snoozy! {
-    fn load_tex(ctx: &mut Context, path: &String) -> Result<Texture> {
+    fn load_tex(ctx: &mut Context, path: &AssetPath) -> Result<Texture> {
         use image::GenericImageView;
 
-        let blob = ctx.get(&load_file("assets/tex/".to_string() + path))?;
+        let blob = ctx.get(&load_blob(path.clone()))?;
         let img = image::load_from_memory(&blob.contents)?;
 
         let dims = img.dimensions();

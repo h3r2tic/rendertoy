@@ -2,6 +2,7 @@ mod backend;
 mod blob;
 mod consts;
 mod mesh;
+mod package;
 mod shader;
 mod texture;
 
