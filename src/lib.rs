@@ -55,12 +55,27 @@ pub struct Rendertoy {
     gl_window: glutin::GlWindow,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct RendertoyConfig {
+	pub width: u32,
+	pub height: u32,
+}
+
+impl Default for RendertoyConfig {
+    fn default() -> RendertoyConfig {
+		RendertoyConfig {
+			width: 1280,
+			height: 720
+		}
+	}
+}
+
 impl Rendertoy {
-    pub fn new() -> Rendertoy {
+	pub fn new_with_config(cfg: RendertoyConfig) -> Rendertoy {
         let events_loop = glutin::EventsLoop::new();
         let window = glutin::WindowBuilder::new()
             .with_title("Hello, world!")
-            .with_dimensions(LogicalSize::new(1024.0, 768.0));
+            .with_dimensions(LogicalSize::new(cfg.width as f64, cfg.height as f64));
         let context = glutin::ContextBuilder::new()
             .with_vsync(true)
             .with_gl_debug_flag(true)
@@ -105,6 +120,10 @@ impl Rendertoy {
             events_loop,
             gl_window,
         }
+	}
+
+    pub fn new() -> Rendertoy {
+		Self::new_with_config(Default::default())
     }
 
     fn next_frame(&mut self) -> bool {
