@@ -25,9 +25,11 @@ macro_rules! def_shader_uniform_types {
 def_shader_uniform_types! {
     pub enum ShaderUniformValue {
         Float32(f32),
+        Uint32(u32),
         Int32(i32),
         Ivec2((i32, i32)),
         Float32Asset(SnoozyRef<f32>),
+        Uint32Asset(SnoozyRef<u32>),
         UsizeAsset(SnoozyRef<usize>),
         TextureAsset(SnoozyRef<Texture>),
     }
@@ -140,6 +142,9 @@ snoozy! {
                 ShaderUniformValue::Float32Asset(ref asset) =>{
                     ctx.get(asset)?;
                 },
+                ShaderUniformValue::Uint32Asset(ref asset) =>{
+                    ctx.get(asset)?;
+                },
                 ShaderUniformValue::UsizeAsset(ref asset) =>{
                     ctx.get(asset)?;
                 },
@@ -194,11 +199,17 @@ snoozy! {
                 ShaderUniformValue::Int32(ref value) => {
                     unsafe { gl::Uniform1i(loc, *value); }
                 },
+                ShaderUniformValue::Uint32(ref value) => {
+                    unsafe { gl::Uniform1ui(loc, *value); }
+                },
                 ShaderUniformValue::Ivec2(ref value) => {
                     unsafe { gl::Uniform2i(loc, value.0, value.1); }
                 },
                 ShaderUniformValue::Float32Asset(ref asset) => {
                     unsafe { gl::Uniform1f(loc, *ctx.get(asset)?); }
+                },
+                ShaderUniformValue::Uint32Asset(ref asset) => {
+                    unsafe { gl::Uniform1ui(loc, *ctx.get(asset)?); }
                 },
                 ShaderUniformValue::UsizeAsset(ref asset) => {
                     unsafe { gl::Uniform1i(loc, *ctx.get(asset)? as i32); }

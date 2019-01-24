@@ -8,6 +8,7 @@ pub struct TextureKey {
     pub format: u32,
 }
 
+#[derive(Clone)]
 pub struct Texture {
     pub texture_id: u32,
     pub sampler_id: u32,

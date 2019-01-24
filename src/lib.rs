@@ -53,28 +53,38 @@ extern "system" fn gl_debug_message(
 pub struct Rendertoy {
     events_loop: glutin::EventsLoop,
     gl_window: glutin::GlWindow,
+    mouse_physical_pos: glutin::dpi::PhysicalPosition,
+}
+
+pub struct Point2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+pub struct FrameState {
+    pub mouse_pos: Point2,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct RendertoyConfig {
-	pub width: u32,
-	pub height: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Default for RendertoyConfig {
     fn default() -> RendertoyConfig {
-		RendertoyConfig {
-			width: 1280,
-			height: 720
-		}
-	}
+        RendertoyConfig {
+            width: 1280,
+            height: 720,
+        }
+    }
 }
 
 impl Rendertoy {
-	pub fn new_with_config(cfg: RendertoyConfig) -> Rendertoy {
+    pub fn new_with_config(cfg: RendertoyConfig) -> Rendertoy {
         let events_loop = glutin::EventsLoop::new();
         let window = glutin::WindowBuilder::new()
-            .with_title("Hello, world!")
+            .with_title("Hello, rusty world!")
             .with_dimensions(LogicalSize::new(cfg.width as f64, cfg.height as f64));
         let context = glutin::ContextBuilder::new()
             .with_vsync(true)
@@ -119,11 +129,12 @@ impl Rendertoy {
         Rendertoy {
             events_loop,
             gl_window,
+            mouse_physical_pos: glutin::dpi::PhysicalPosition::new(0.0, 0.0),
         }
-	}
+    }
 
     pub fn new() -> Rendertoy {
-		Self::new_with_config(Default::default())
+        Self::new_with_config(Default::default())
     }
 
     fn next_frame(&mut self) -> bool {
@@ -147,6 +158,14 @@ impl Rendertoy {
                             gl::Viewport(0, 0, phys_size.width as i32, phys_size.height as i32);
                         }
                     }
+                    glutin::WindowEvent::CursorMoved {
+                        position: logical_pos,
+                        device_id: _,
+                        modifiers: _,
+                    } => {
+                        let dpi_factor = self.gl_window.get_hidpi_factor();
+                        self.mouse_physical_pos = logical_pos.to_physical(dpi_factor);
+                    }
                     _ => (),
                 },
                 _ => (),
@@ -158,7 +177,7 @@ impl Rendertoy {
 
     pub fn with_frame_snapshot<F>(&mut self, callback: &mut F) -> bool
     where
-        F: FnMut(&mut Snapshot),
+        F: FnMut(&mut Snapshot, &FrameState),
     {
         with_snapshot(|snapshot| {
             unsafe {
@@ -166,7 +185,14 @@ impl Rendertoy {
                 gl::Clear(gl::COLOR_BUFFER_BIT);
             }
 
-            callback(snapshot);
+            let state = FrameState {
+                mouse_pos: Point2 {
+                    x: self.mouse_physical_pos.x as f32,
+                    y: self.mouse_physical_pos.y as f32,
+                },
+            };
+
+            callback(snapshot, &state);
 
             self.next_frame()
         })
@@ -174,7 +200,7 @@ impl Rendertoy {
 
     pub fn forever<F>(&mut self, mut callback: F)
     where
-        F: FnMut(&mut Snapshot),
+        F: FnMut(&mut Snapshot, &FrameState),
     {
         let mut running = true;
         while running {
