@@ -25,6 +25,10 @@ extern crate lazy_static;
 use glutin::dpi::*;
 use glutin::GlContext;
 
+use clap::ArgMatches;
+
+use std::str::FromStr;
+
 extern "system" fn gl_debug_message(
     _source: u32,
     type_: u32,
@@ -54,6 +58,7 @@ pub struct Rendertoy {
     events_loop: glutin::EventsLoop,
     gl_window: glutin::GlWindow,
     mouse_physical_pos: glutin::dpi::PhysicalPosition,
+    cfg: RendertoyConfig,
 }
 
 pub struct Point2 {
@@ -71,12 +76,29 @@ pub struct RendertoyConfig {
     pub height: u32,
 }
 
-impl Default for RendertoyConfig {
-    fn default() -> RendertoyConfig {
-        RendertoyConfig {
-            width: 1280,
-            height: 720,
-        }
+fn parse_resolution(s: &str) -> Result<(u32, u32)> {
+    match s.find('x') {
+        Some(pos) => match (
+            FromStr::from_str(&s[..pos]),
+            FromStr::from_str(&s[pos + 1..]),
+        ) {
+            (Ok(a), Ok(b)) => return Ok((a, b)),
+            _ => (),
+        },
+        None => (),
+    };
+
+    Err(format_err!("Expected NUMBERxNUMBER, got {}", s))
+}
+
+impl RendertoyConfig {
+    fn from_args(matches: &ArgMatches) -> RendertoyConfig {
+        let (width, height) = matches
+            .value_of("resolution")
+            .map(|val| parse_resolution(val).unwrap())
+            .unwrap_or((1280, 720));
+
+        RendertoyConfig { width, height }
     }
 }
 
@@ -130,11 +152,31 @@ impl Rendertoy {
             events_loop,
             gl_window,
             mouse_physical_pos: glutin::dpi::PhysicalPosition::new(0.0, 0.0),
+            cfg,
         }
     }
 
     pub fn new() -> Rendertoy {
-        Self::new_with_config(Default::default())
+        let matches = clap::App::new("Rendertoy")
+            .version("1.0")
+            .about("Does awesome things")
+            .arg(
+                clap::Arg::with_name("resolution")
+                    .long("resolution")
+                    .help("Window resolution")
+                    .takes_value(true),
+            )
+            .get_matches();
+
+        Self::new_with_config(RendertoyConfig::from_args(&matches))
+    }
+
+    pub fn width(&self) -> u32 {
+        self.cfg.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.cfg.height
     }
 
     fn next_frame(&mut self) -> bool {
