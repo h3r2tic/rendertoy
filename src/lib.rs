@@ -1,5 +1,6 @@
 mod backend;
 mod blob;
+mod buffer;
 mod consts;
 mod mesh;
 mod package;
@@ -10,6 +11,7 @@ pub use gl;
 pub use snoozy::*;
 
 pub use self::blob::*;
+pub use self::buffer::*;
 pub use self::consts::*;
 pub use self::mesh::*;
 pub use self::shader::*;

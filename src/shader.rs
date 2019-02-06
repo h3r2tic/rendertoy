@@ -1,4 +1,5 @@
 use super::blob::*;
+use super::buffer::Buffer;
 use super::texture::{Texture, TextureKey};
 use crate::backend;
 use relative_path::{RelativePath, RelativePathBuf};
@@ -32,6 +33,7 @@ def_shader_uniform_types! {
         Uint32Asset(SnoozyRef<u32>),
         UsizeAsset(SnoozyRef<usize>),
         TextureAsset(SnoozyRef<Texture>),
+        BufferAsset(SnoozyRef<Buffer>),
     }
 }
 
@@ -160,7 +162,8 @@ snoozy! {
 
         let output_tex = backend::texture::create_texture(*key);
 
-        let mut img_unit : i32 = 0;
+        let mut img_unit: i32 = 0;
+        let mut ssbo_unit: u32 =0;
 
         for uniform in uniforms.iter() {
             let c_name = std::ffi::CString::new(uniform.name.clone()).unwrap();
@@ -191,6 +194,16 @@ snoozy! {
                                 img_unit += 1;
                             }
                         }
+                    }
+                },
+                ShaderUniformValue::BufferAsset(ref buf_asset) => {
+                    let buf = ctx.get(buf_asset)?;
+
+                    unsafe {
+                        let block_index = gl::GetProgramResourceIndex(cs.handle, gl::SHADER_STORAGE_BLOCK, c_name.as_ptr());
+                        gl::ShaderStorageBlockBinding(cs.handle, block_index, ssbo_unit);
+                        gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, ssbo_unit, buf.buffer_id);
+                        ssbo_unit += 1;
                     }
                 },
                 ShaderUniformValue::Float32(ref value) => {
