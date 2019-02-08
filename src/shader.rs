@@ -201,9 +201,11 @@ snoozy! {
 
                     unsafe {
                         let block_index = gl::GetProgramResourceIndex(cs.handle, gl::SHADER_STORAGE_BLOCK, c_name.as_ptr());
-                        gl::ShaderStorageBlockBinding(cs.handle, block_index, ssbo_unit);
-                        gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, ssbo_unit, buf.buffer_id);
-                        ssbo_unit += 1;
+                        if block_index != std::u32::MAX {
+                            gl::ShaderStorageBlockBinding(cs.handle, block_index, ssbo_unit);
+                            gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, ssbo_unit, buf.buffer_id);
+                            ssbo_unit += 1;
+                        }
                     }
                 },
                 ShaderUniformValue::Float32(ref value) => {
