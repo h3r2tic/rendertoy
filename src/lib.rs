@@ -60,6 +60,7 @@ pub struct Rendertoy {
     events_loop: glutin::EventsLoop,
     gl_window: glutin::GlWindow,
     mouse_physical_pos: glutin::dpi::PhysicalPosition,
+    last_timing_query_elapsed: u64,
     cfg: RendertoyConfig,
 }
 
@@ -70,6 +71,7 @@ pub struct Point2 {
 
 pub struct FrameState {
     pub mouse_pos: Point2,
+    pub gpu_time_ms: f64,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -154,6 +156,7 @@ impl Rendertoy {
             events_loop,
             gl_window,
             mouse_physical_pos: glutin::dpi::PhysicalPosition::new(0.0, 0.0),
+            last_timing_query_elapsed: 0,
             cfg,
         }
     }
@@ -234,6 +237,7 @@ impl Rendertoy {
                     x: self.mouse_physical_pos.x as f32,
                     y: self.mouse_physical_pos.y as f32,
                 },
+                gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
             };
 
             callback(snapshot, &state);
@@ -246,9 +250,47 @@ impl Rendertoy {
     where
         F: FnMut(&mut Snapshot, &FrameState),
     {
+        let mut timing_query_handle = 0u32;
+        let mut timing_query_in_flight = false;
+
+        unsafe {
+            gl::GenQueries(1, &mut timing_query_handle);
+        }
+
         let mut running = true;
         while running {
+            unsafe {
+                if timing_query_in_flight {
+                    let mut available: i32 = 0;
+                    gl::GetQueryObjectiv(
+                        timing_query_handle,
+                        gl::QUERY_RESULT_AVAILABLE,
+                        &mut available,
+                    );
+
+                    if available != 0 {
+                        timing_query_in_flight = false;
+                        gl::GetQueryObjectui64v(
+                            timing_query_handle,
+                            gl::QUERY_RESULT,
+                            &mut self.last_timing_query_elapsed,
+                        );
+                    }
+                }
+
+                if !timing_query_in_flight {
+                    gl::BeginQuery(gl::TIME_ELAPSED, timing_query_handle);
+                }
+            }
+
             running = self.with_frame_snapshot(&mut callback);
+
+            unsafe {
+                if !timing_query_in_flight {
+                    gl::EndQuery(gl::TIME_ELAPSED);
+                    timing_query_in_flight = true;
+                }
+            }
         }
     }
 }
