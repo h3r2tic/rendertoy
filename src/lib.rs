@@ -4,18 +4,27 @@ mod buffer;
 mod consts;
 mod mesh;
 mod package;
+mod rgb9e5;
+mod rt;
 mod shader;
 mod texture;
 
 pub use gl;
+pub use nalgebra as na;
 pub use snoozy::*;
 
 pub use self::blob::*;
 pub use self::buffer::*;
 pub use self::consts::*;
 pub use self::mesh::*;
+pub use self::rt::*;
 pub use self::shader::*;
 pub use self::texture::*;
+
+pub type Point3 = na::Point3<f32>;
+pub type Vector3 = na::Vector3<f32>;
+pub type Matrix4 = na::Matrix4<f32>;
+pub type Isometry3 = na::Isometry3<f32>;
 
 #[macro_use]
 extern crate failure;
@@ -23,6 +32,8 @@ extern crate failure;
 extern crate serde_derive;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate static_assertions;
 
 use glutin::dpi::*;
 use glutin::GlContext;
