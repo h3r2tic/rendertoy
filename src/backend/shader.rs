@@ -62,12 +62,12 @@ pub(crate) fn make_shader(
             let log_str = log_str.to_string_lossy().into_owned();
 
             lazy_static! {
-                static ref intel_error_re: Regex =
+                static ref INTEL_ERROR_RE: Regex =
                     Regex::new(r"(?m)^ERROR:\s*(\d+):(\d+)").unwrap();
             }
 
             lazy_static! {
-                static ref nv_error_re: Regex = Regex::new(r"(?m)^(\d+)\((\d+)\)\s*").unwrap();
+                static ref NV_ERROR_RE: Regex = Regex::new(r"(?m)^(\d+)\((\d+)\)\s*").unwrap();
             }
 
             let error_replacement = |captures: &regex::Captures| -> String {
@@ -80,8 +80,8 @@ pub(crate) fn make_shader(
                 )
             };
 
-            let pretty_log = intel_error_re.replace_all(&log_str, error_replacement);
-            let pretty_log = nv_error_re.replace_all(&pretty_log, error_replacement);
+            let pretty_log = INTEL_ERROR_RE.replace_all(&log_str, error_replacement);
+            let pretty_log = NV_ERROR_RE.replace_all(&pretty_log, error_replacement);
 
             gl::DeleteShader(handle);
             Err(format_err!(

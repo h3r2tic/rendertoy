@@ -2,7 +2,7 @@ use super::shader::{make_program, make_shader};
 
 pub fn draw_fullscreen_texture(tex: u32) {
     lazy_static! {
-        static ref prog: u32 = {
+        static ref PROG: u32 = {
             let vs = make_shader(
                 gl::VERTEX_SHADER,
                 &[shader_prepper::SourceChunk {
@@ -44,12 +44,12 @@ pub fn draw_fullscreen_texture(tex: u32) {
     }
 
     unsafe {
-        gl::UseProgram(*prog);
+        gl::UseProgram(*PROG);
 
         gl::ActiveTexture(gl::TEXTURE0);
         gl::BindTexture(gl::TEXTURE_2D, tex);
 
-        let loc = gl::GetUniformLocation(*prog, "Texture\0".as_ptr() as *const i8);
+        let loc = gl::GetUniformLocation(*PROG, "Texture\0".as_ptr() as *const i8);
         let img_unit = 0;
         gl::Uniform1i(loc, img_unit);
 

@@ -34,6 +34,8 @@ def_shader_uniform_types! {
         UsizeAsset(SnoozyRef<usize>),
         TextureAsset(SnoozyRef<Texture>),
         BufferAsset(SnoozyRef<Buffer>),
+        Bundle(Vec<ShaderUniformHolder>),
+        BundleAsset(SnoozyRef<Vec<ShaderUniformHolder>>),
     }
 }
 
@@ -55,6 +57,8 @@ impl ShaderUniformHolder {
         }
     }
 }
+
+pub type ShaderUniformBundle = Vec<ShaderUniformHolder>;
 
 #[macro_export]
 macro_rules! shader_uniforms {
@@ -133,38 +137,55 @@ snoozy! {
     }
 }
 
-snoozy! {
-    fn compute_tex(ctx: &mut Context, key: &TextureKey, cs: &SnoozyRef<ComputeShader>, uniforms: &Vec<ShaderUniformHolder>) -> Result<Texture> {
+#[derive(Default)]
+struct ShaderUniformPlumber {
+    img_unit: i32,
+    ssbo_unit: u32,
+}
+
+impl ShaderUniformPlumber {
+    fn prepare(&self, ctx: &mut Context, uniforms: &Vec<ShaderUniformHolder>) -> Result<()> {
         // Eval input parameters
         for uniform in uniforms.iter() {
             match uniform.value {
                 ShaderUniformValue::TextureAsset(ref asset) => {
                     ctx.get(asset)?;
-                },
-                ShaderUniformValue::Float32Asset(ref asset) =>{
+                }
+                ShaderUniformValue::BufferAsset(ref asset) => {
                     ctx.get(asset)?;
-                },
-                ShaderUniformValue::Uint32Asset(ref asset) =>{
+                }
+                ShaderUniformValue::Float32Asset(ref asset) => {
                     ctx.get(asset)?;
-                },
-                ShaderUniformValue::UsizeAsset(ref asset) =>{
+                }
+                ShaderUniformValue::Uint32Asset(ref asset) => {
                     ctx.get(asset)?;
-                },
-                _ => (),
+                }
+                ShaderUniformValue::UsizeAsset(ref asset) => {
+                    ctx.get(asset)?;
+                }
+                ShaderUniformValue::Bundle(ref bundle) => {
+                    self.prepare(ctx, &bundle)?;
+                }
+                ShaderUniformValue::BundleAsset(ref bundle) => {
+                    let bundle = &*ctx.get(bundle)?;
+                    self.prepare(ctx, bundle)?;
+                }
+                ShaderUniformValue::Float32(_)
+                | ShaderUniformValue::Uint32(_)
+                | ShaderUniformValue::Int32(_)
+                | ShaderUniformValue::Ivec2(_) => {}
             }
         }
 
-        let cs = ctx.get(cs)?;
+        Ok(())
+    }
 
-        unsafe {
-            gl::UseProgram(cs.handle);
-        }
-
-        let output_tex = backend::texture::create_texture(*key);
-
-        let mut img_unit: i32 = 0;
-        let mut ssbo_unit: u32 =0;
-
+    fn plumb(
+        &mut self,
+        ctx: &mut Context,
+        cs: &ComputeShader,
+        uniforms: &Vec<ShaderUniformHolder>,
+    ) -> Result<()> {
         for uniform in uniforms.iter() {
             let c_name = std::ffi::CString::new(uniform.name.clone()).unwrap();
             let loc = unsafe { gl::GetUniformLocation(cs.handle, c_name.as_ptr()) };
@@ -177,60 +198,113 @@ snoozy! {
                         if loc != -1 {
                             let mut type_gl = 0;
                             let mut size = 0;
-                            gl::GetActiveUniform(cs.handle, loc as u32, 0, std::ptr::null_mut(), &mut size, &mut type_gl, std::ptr::null_mut());
+                            gl::GetActiveUniform(
+                                cs.handle,
+                                loc as u32,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut size,
+                                &mut type_gl,
+                                std::ptr::null_mut(),
+                            );
 
                             if gl::IMAGE_2D == type_gl {
                                 let level = 0;
                                 let layered = gl::FALSE;
-                                gl::BindImageTexture(img_unit as u32, tex.texture_id, level, layered, 0, gl::READ_ONLY, tex.key.format);
-                                gl::Uniform1i(loc, img_unit);
-                                img_unit += 1;
-                            }
-                            else if gl::SAMPLER_2D == type_gl {
-                                gl::ActiveTexture(gl::TEXTURE0 + img_unit as u32);
+                                gl::BindImageTexture(
+                                    self.img_unit as u32,
+                                    tex.texture_id,
+                                    level,
+                                    layered,
+                                    0,
+                                    gl::READ_ONLY,
+                                    tex.key.format,
+                                );
+                                gl::Uniform1i(loc, self.img_unit);
+                                self.img_unit += 1;
+                            } else if gl::SAMPLER_2D == type_gl {
+                                gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
                                 gl::BindTexture(gl::TEXTURE_2D, tex.texture_id);
-                                gl::BindSampler(img_unit as u32, tex.sampler_id);
-                                gl::Uniform1i(loc, img_unit);
-                                img_unit += 1;
+                                gl::BindSampler(self.img_unit as u32, tex.sampler_id);
+                                gl::Uniform1i(loc, self.img_unit);
+                                self.img_unit += 1;
                             }
                         }
                     }
-                },
+                }
                 ShaderUniformValue::BufferAsset(ref buf_asset) => {
                     let buf = ctx.get(buf_asset)?;
 
                     unsafe {
-                        let block_index = gl::GetProgramResourceIndex(cs.handle, gl::SHADER_STORAGE_BLOCK, c_name.as_ptr());
+                        let block_index = gl::GetProgramResourceIndex(
+                            cs.handle,
+                            gl::SHADER_STORAGE_BLOCK,
+                            c_name.as_ptr(),
+                        );
                         if block_index != std::u32::MAX {
-                            gl::ShaderStorageBlockBinding(cs.handle, block_index, ssbo_unit);
-                            gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, ssbo_unit, buf.buffer_id);
-                            ssbo_unit += 1;
+                            gl::ShaderStorageBlockBinding(cs.handle, block_index, self.ssbo_unit);
+                            gl::BindBufferBase(
+                                gl::SHADER_STORAGE_BUFFER,
+                                self.ssbo_unit,
+                                buf.buffer_id,
+                            );
+                            self.ssbo_unit += 1;
                         }
                     }
+                }
+                ShaderUniformValue::Bundle(ref bundle) => {
+                    self.plumb(ctx, cs, bundle)?;
+                }
+                ShaderUniformValue::BundleAsset(ref bundle) => {
+                    let bundle = &*ctx.get(bundle)?;
+                    self.plumb(ctx, cs, bundle)?;
+                }
+                ShaderUniformValue::Float32(ref value) => unsafe {
+                    gl::Uniform1f(loc, *value);
                 },
-                ShaderUniformValue::Float32(ref value) => {
-                    unsafe { gl::Uniform1f(loc, *value); }
+                ShaderUniformValue::Int32(ref value) => unsafe {
+                    gl::Uniform1i(loc, *value);
                 },
-                ShaderUniformValue::Int32(ref value) => {
-                    unsafe { gl::Uniform1i(loc, *value); }
+                ShaderUniformValue::Uint32(ref value) => unsafe {
+                    gl::Uniform1ui(loc, *value);
                 },
-                ShaderUniformValue::Uint32(ref value) => {
-                    unsafe { gl::Uniform1ui(loc, *value); }
+                ShaderUniformValue::Ivec2(ref value) => unsafe {
+                    gl::Uniform2i(loc, value.0, value.1);
                 },
-                ShaderUniformValue::Ivec2(ref value) => {
-                    unsafe { gl::Uniform2i(loc, value.0, value.1); }
+                ShaderUniformValue::Float32Asset(ref asset) => unsafe {
+                    gl::Uniform1f(loc, *ctx.get(asset)?);
                 },
-                ShaderUniformValue::Float32Asset(ref asset) => {
-                    unsafe { gl::Uniform1f(loc, *ctx.get(asset)?); }
+                ShaderUniformValue::Uint32Asset(ref asset) => unsafe {
+                    gl::Uniform1ui(loc, *ctx.get(asset)?);
                 },
-                ShaderUniformValue::Uint32Asset(ref asset) => {
-                    unsafe { gl::Uniform1ui(loc, *ctx.get(asset)?); }
-                },
-                ShaderUniformValue::UsizeAsset(ref asset) => {
-                    unsafe { gl::Uniform1i(loc, *ctx.get(asset)? as i32); }
+                ShaderUniformValue::UsizeAsset(ref asset) => unsafe {
+                    gl::Uniform1i(loc, *ctx.get(asset)? as i32);
                 },
             }
         }
+
+        Ok(())
+    }
+}
+
+snoozy! {
+    fn compute_tex(ctx: &mut Context, key: &TextureKey, cs: &SnoozyRef<ComputeShader>, uniforms: &Vec<ShaderUniformHolder>) -> Result<Texture> {
+        let mut uniform_plumber = ShaderUniformPlumber::default();
+
+        let cs = ctx.get(cs)?;
+
+        let mut img_unit = {
+            uniform_plumber.prepare(ctx, uniforms)?;
+
+            unsafe {
+                gl::UseProgram(cs.handle);
+            }
+
+            uniform_plumber.plumb(ctx, &cs, uniforms)?;
+            uniform_plumber.img_unit
+        };
+
+        let output_tex = backend::texture::create_texture(*key);
 
         let dispatch_size = (key.width, key.height);
 
