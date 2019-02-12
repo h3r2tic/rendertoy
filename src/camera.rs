@@ -101,7 +101,7 @@ impl FirstPersonCamera {
 
     pub fn new(position: Point3) -> FirstPersonCamera {
         FirstPersonCamera {
-            yaw: -60_f32,
+            yaw: 0_f32,
             pitch: 0_f32,
             roll: 0_f32,
             fov: 45_f32,

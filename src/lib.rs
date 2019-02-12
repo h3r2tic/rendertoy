@@ -9,6 +9,7 @@ mod package;
 mod rgb9e5;
 mod shader;
 mod texture;
+mod viewport;
 
 pub use gl;
 pub use nalgebra as na;
@@ -23,6 +24,7 @@ pub use self::mesh::*;
 pub use self::rgb9e5::*;
 pub use self::shader::*;
 pub use self::texture::*;
+pub use self::viewport::*;
 
 pub type Point2 = na::Point2<f32>;
 pub type Vector2 = na::Vector2<f32>;
