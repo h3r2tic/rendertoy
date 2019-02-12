@@ -2,6 +2,7 @@ mod backend;
 mod blob;
 mod buffer;
 mod consts;
+mod keyboard;
 mod mesh;
 mod package;
 mod rgb9e5;
@@ -15,6 +16,7 @@ pub use snoozy::*;
 pub use self::blob::*;
 pub use self::buffer::*;
 pub use self::consts::*;
+pub use self::keyboard::*;
 pub use self::mesh::*;
 pub use self::rgb9e5::*;
 pub use self::shader::*;
@@ -68,8 +70,10 @@ pub struct Rendertoy {
     events_loop: glutin::EventsLoop,
     gl_window: glutin::GlWindow,
     mouse_physical_pos: glutin::dpi::PhysicalPosition,
+    mouse_buttons_down: u32,
     last_timing_query_elapsed: u64,
     cfg: RendertoyConfig,
+    keyboard: KeyboardState,
 }
 
 pub struct Point2 {
@@ -77,8 +81,10 @@ pub struct Point2 {
     pub y: f32,
 }
 
-pub struct FrameState {
+pub struct FrameState<'a> {
     pub mouse_pos: Point2,
+    pub mouse_buttons_down: u32,
+    pub keys: &'a KeyboardState,
     pub gpu_time_ms: f64,
 }
 
@@ -164,8 +170,10 @@ impl Rendertoy {
             events_loop,
             gl_window,
             mouse_physical_pos: glutin::dpi::PhysicalPosition::new(0.0, 0.0),
+            mouse_buttons_down: 0,
             last_timing_query_elapsed: 0,
             cfg,
+            keyboard: KeyboardState::new()
         }
     }
 
@@ -200,6 +208,8 @@ impl Rendertoy {
         let mut events = Vec::new();
         self.events_loop.poll_events(|event| events.push(event));
 
+        let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
+
         for event in events.iter() {
             #[allow(clippy::single_match)]
             match event {
@@ -213,6 +223,9 @@ impl Rendertoy {
                             gl::Viewport(0, 0, phys_size.width as i32, phys_size.height as i32);
                         }
                     }
+                    glutin::WindowEvent::KeyboardInput { input, .. } => {
+                        keyboard_events.push(*input);
+                    }
                     glutin::WindowEvent::CursorMoved {
                         position: logical_pos,
                         device_id: _,
@@ -220,12 +233,29 @@ impl Rendertoy {
                     } => {
                         let dpi_factor = self.gl_window.get_hidpi_factor();
                         self.mouse_physical_pos = logical_pos.to_physical(dpi_factor);
+                    },
+                    glutin::WindowEvent::MouseInput { state, button, .. } => {
+                        let button_id = match button {
+                            glutin::MouseButton::Left => 0,
+                            glutin::MouseButton::Middle => 1,
+                            glutin::MouseButton::Right => 2,
+                            _ => 0,
+                        };
+
+                        if let glutin::ElementState::Pressed = state {
+                            self.mouse_buttons_down |= 1 << button_id;
+                        } else {
+                            self.mouse_buttons_down &= !(1 << button_id);
+                        }
                     }
                     _ => (),
                 },
                 _ => (),
             }
         }
+
+        // TODO: proper time
+        self.keyboard.update(keyboard_events, 1.0 / 60.0);
 
         running
     }
@@ -245,7 +275,9 @@ impl Rendertoy {
                     x: self.mouse_physical_pos.x as f32,
                     y: self.mouse_physical_pos.y as f32,
                 },
+                mouse_buttons_down: self.mouse_buttons_down,
                 gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
+                keys: &self.keyboard
             };
 
             callback(snapshot, &state);
