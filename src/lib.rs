@@ -1,6 +1,7 @@
 mod backend;
 mod blob;
 mod buffer;
+mod camera;
 mod consts;
 mod keyboard;
 mod mesh;
@@ -15,6 +16,7 @@ pub use snoozy::*;
 
 pub use self::blob::*;
 pub use self::buffer::*;
+pub use self::camera::*;
 pub use self::consts::*;
 pub use self::keyboard::*;
 pub use self::mesh::*;
@@ -22,8 +24,15 @@ pub use self::rgb9e5::*;
 pub use self::shader::*;
 pub use self::texture::*;
 
+pub type Point2 = na::Point2<f32>;
+pub type Vector2 = na::Vector2<f32>;
+
 pub type Point3 = na::Point3<f32>;
 pub type Vector3 = na::Vector3<f32>;
+
+pub type Point4 = na::Point4<f32>;
+pub type Vector4 = na::Vector4<f32>;
+
 pub type Matrix4 = na::Matrix4<f32>;
 pub type Isometry3 = na::Isometry3<f32>;
 
@@ -69,21 +78,39 @@ extern "system" fn gl_debug_message(
 pub struct Rendertoy {
     events_loop: glutin::EventsLoop,
     gl_window: glutin::GlWindow,
-    mouse_physical_pos: glutin::dpi::PhysicalPosition,
-    mouse_buttons_down: u32,
+    mouse_state: MouseState,
     last_timing_query_elapsed: u64,
     cfg: RendertoyConfig,
     keyboard: KeyboardState,
 }
 
-pub struct Point2 {
-    pub x: f32,
-    pub y: f32,
+#[derive(Clone)]
+pub struct MouseState {
+    pub pos: Point2,
+    pub delta: Vector2,
+    pub button_mask: u32,
+}
+
+impl Default for MouseState {
+    fn default() -> Self {
+        Self {
+            pos: Point2::origin(),
+            delta: Vector2::zeros(),
+            button_mask: 0,
+        }
+    }
+}
+
+impl MouseState {
+    fn update(&mut self, new_state: &MouseState) {
+        self.delta = new_state.pos - self.pos;
+        self.pos = new_state.pos;
+        self.button_mask = new_state.button_mask;
+    }
 }
 
 pub struct FrameState<'a> {
-    pub mouse_pos: Point2,
-    pub mouse_buttons_down: u32,
+    pub mouse: &'a MouseState,
     pub keys: &'a KeyboardState,
     pub gpu_time_ms: f64,
 }
@@ -169,11 +196,10 @@ impl Rendertoy {
         Rendertoy {
             events_loop,
             gl_window,
-            mouse_physical_pos: glutin::dpi::PhysicalPosition::new(0.0, 0.0),
-            mouse_buttons_down: 0,
+            mouse_state: MouseState::default(),
             last_timing_query_elapsed: 0,
             cfg,
-            keyboard: KeyboardState::new()
+            keyboard: KeyboardState::new(),
         }
     }
 
@@ -209,6 +235,7 @@ impl Rendertoy {
         self.events_loop.poll_events(|event| events.push(event));
 
         let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
+        let mut new_mouse_state = self.mouse_state.clone();
 
         for event in events.iter() {
             #[allow(clippy::single_match)]
@@ -232,8 +259,9 @@ impl Rendertoy {
                         modifiers: _,
                     } => {
                         let dpi_factor = self.gl_window.get_hidpi_factor();
-                        self.mouse_physical_pos = logical_pos.to_physical(dpi_factor);
-                    },
+                        let pos = logical_pos.to_physical(dpi_factor);
+                        new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
+                    }
                     glutin::WindowEvent::MouseInput { state, button, .. } => {
                         let button_id = match button {
                             glutin::MouseButton::Left => 0,
@@ -243,9 +271,9 @@ impl Rendertoy {
                         };
 
                         if let glutin::ElementState::Pressed = state {
-                            self.mouse_buttons_down |= 1 << button_id;
+                            new_mouse_state.button_mask |= 1 << button_id;
                         } else {
-                            self.mouse_buttons_down &= !(1 << button_id);
+                            new_mouse_state.button_mask &= !(1 << button_id);
                         }
                     }
                     _ => (),
@@ -256,6 +284,7 @@ impl Rendertoy {
 
         // TODO: proper time
         self.keyboard.update(keyboard_events, 1.0 / 60.0);
+        self.mouse_state.update(&new_mouse_state);
 
         running
     }
@@ -271,13 +300,9 @@ impl Rendertoy {
             }
 
             let state = FrameState {
-                mouse_pos: Point2 {
-                    x: self.mouse_physical_pos.x as f32,
-                    y: self.mouse_physical_pos.y as f32,
-                },
-                mouse_buttons_down: self.mouse_buttons_down,
+                mouse: &self.mouse_state,
+                keys: &self.keyboard,
                 gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
-                keys: &self.keyboard
             };
 
             callback(snapshot, &state);
