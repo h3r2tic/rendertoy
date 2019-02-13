@@ -31,7 +31,8 @@ fn floor_log2(x: f32) -> i32 {
 }
 
 // https://www.khronos.org/registry/OpenGL/extensions/EXT/EXT_texture_shared_exponent.txt
-pub fn pack_rgb9e5(r: f32, g: f32, b: f32) -> u32 {
+// Modified to round mantissa up
+pub fn pack_rgb9e5_roundup(r: f32, g: f32, b: f32) -> u32 {
     let rc = clamp_range_for_rgb9e5(r);
     let gc = clamp_range_for_rgb9e5(g);
     let bc = clamp_range_for_rgb9e5(b);
@@ -53,13 +54,10 @@ pub fn pack_rgb9e5(r: f32, g: f32, b: f32) -> u32 {
         assert!(maxm <= MAX_RGB9E5_MANTISSA);
     }
 
-    let rm = (rc as f64 / denom + 0.5).floor() as i32;
-    let gm = (gc as f64 / denom + 0.5).floor() as i32;
-    let bm = (bc as f64 / denom + 0.5).floor() as i32;
+    let rm = ((rc as f64 / denom).ceil() as i32).min(MAX_RGB9E5_MANTISSA);
+    let gm = ((gc as f64 / denom).ceil() as i32).min(MAX_RGB9E5_MANTISSA);
+    let bm = ((bc as f64 / denom).ceil() as i32).min(MAX_RGB9E5_MANTISSA);
 
-    assert!(rm <= MAX_RGB9E5_MANTISSA);
-    assert!(gm <= MAX_RGB9E5_MANTISSA);
-    assert!(bm <= MAX_RGB9E5_MANTISSA);
     assert!(rm >= 0);
     assert!(gm >= 0);
     assert!(bm >= 0);
