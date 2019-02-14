@@ -10,15 +10,15 @@ pub struct ViewportConstants {
 }
 
 impl ViewportConstants {
-    pub fn build(
-        camera_matrices: CameraMatrices,
+    pub fn build<CamMat: Into<CameraMatrices>>(
+        camera_matrices: CamMat,
         width: u32,
         height: u32,
     ) -> VieportConstantBuilder {
         VieportConstantBuilder {
             width,
             height,
-            camera_matrices,
+            camera_matrices: camera_matrices.into(),
             pixel_offset: Vector2::zeros(),
         }
     }

@@ -289,9 +289,9 @@ impl Rendertoy {
         running
     }
 
-    pub fn with_frame_snapshot<F>(&mut self, callback: &mut F) -> bool
+    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F) -> bool
     where
-        F: FnMut(&mut Snapshot, &FrameState),
+        F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
         with_snapshot(|snapshot| {
             //unsafe {
@@ -313,15 +313,16 @@ impl Rendertoy {
                 window_size_pixels,
             };
 
-            callback(snapshot, &state);
+            let tex = callback(&state);
+            draw_fullscreen_texture(&*snapshot.get(tex), state.window_size_pixels);
 
             self.next_frame()
         })
     }
 
-    pub fn forever<F>(&mut self, mut callback: F)
+    pub fn draw_forever<F>(&mut self, mut callback: F)
     where
-        F: FnMut(&mut Snapshot, &FrameState),
+        F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
         let mut timing_query_handle = 0u32;
         let mut timing_query_in_flight = false;
@@ -356,7 +357,7 @@ impl Rendertoy {
                 }
             }
 
-            running = self.with_frame_snapshot(&mut callback);
+            running = self.draw_with_frame_snapshot(&mut callback);
 
             unsafe {
                 if !timing_query_in_flight {

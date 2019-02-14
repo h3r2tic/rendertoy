@@ -10,8 +10,14 @@ pub struct CameraMatrices {
 pub trait Camera {
     type InputType;
 
-    fn update(&mut self, input: Self::InputType, time: f32);
+    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType, time: f32);
     fn calc_matrices(&self) -> CameraMatrices;
+}
+
+impl<T: Camera> From<&T> for CameraMatrices {
+    fn from(camera: &T) -> CameraMatrices {
+        camera.calc_matrices()
+    }
 }
 
 pub struct FirstPersonCamera {
@@ -35,8 +41,8 @@ pub struct FirstPersonCameraInput {
     pitch_delta: f32,
 }
 
-impl FirstPersonCameraInput {
-    pub fn from_frame_state(frame_state: &FrameState) -> FirstPersonCameraInput {
+impl<'a> From<&FrameState<'a>> for FirstPersonCameraInput {
+    fn from(frame_state: &FrameState<'a>) -> FirstPersonCameraInput {
         let mut yaw_delta = 0.0;
         let mut pitch_delta = 0.0;
 
@@ -117,7 +123,8 @@ impl FirstPersonCamera {
 impl Camera for FirstPersonCamera {
     type InputType = FirstPersonCameraInput;
 
-    fn update(&mut self, input: FirstPersonCameraInput, time: f32) {
+    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType, time: f32) {
+        let input = input.into();
         self.translate(&input.move_vec);
         self.rotate_pitch(input.pitch_delta);
         self.rotate_yaw(input.yaw_delta);
@@ -211,7 +218,7 @@ impl<CameraType: Camera> CameraConvergenceEnforcer<CameraType> {
 impl<CameraType: Camera> Camera for CameraConvergenceEnforcer<CameraType> {
     type InputType = CameraType::InputType;
 
-    fn update(&mut self, input: Self::InputType, time: f32) {
+    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType, time: f32) {
         self.camera.update(input, time);
 
         let new_matrices = self.camera.calc_matrices();
