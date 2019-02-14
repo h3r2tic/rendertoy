@@ -1,6 +1,6 @@
 use super::shader::{make_program, make_shader};
 
-pub fn draw_fullscreen_texture(tex: u32) {
+pub fn draw_fullscreen_texture(tex: u32, framebuffer_size: (u32, u32)) {
     lazy_static! {
         static ref PROG: u32 = {
             let vs = make_shader(
@@ -53,7 +53,8 @@ pub fn draw_fullscreen_texture(tex: u32) {
         let img_unit = 0;
         gl::Uniform1i(loc, img_unit);
 
-        //gl::Viewport(0, 0, width as i32, height as i32);
+        gl::Viewport(0, 0, framebuffer_size.0 as i32, framebuffer_size.1 as i32);
+        gl::Disable(gl::DEPTH_TEST);
 
         gl::DrawArrays(gl::TRIANGLES, 0, 3);
         gl::UseProgram(0);

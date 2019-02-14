@@ -106,7 +106,7 @@ impl FirstPersonCamera {
             roll: 0_f32,
             fov: 45_f32,
             position,
-            near_dist: 0.01_f32,
+            near_dist: 0.1_f32,
             aspect: 1.6_f32,
             interp_rot: UnitQuaternion::from_axis_angle(&Vector3::y_axis(), -0.0f32.to_radians()),
             interp_pos: position,

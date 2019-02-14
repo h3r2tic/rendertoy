@@ -115,6 +115,7 @@ pub struct FrameState<'a> {
     pub mouse: &'a MouseState,
     pub keys: &'a KeyboardState,
     pub gpu_time_ms: f64,
+    pub window_size_pixels: (u32, u32),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -248,9 +249,6 @@ impl Rendertoy {
                         let dpi_factor = self.gl_window.get_hidpi_factor();
                         let phys_size = logical_size.to_physical(dpi_factor);
                         self.gl_window.resize(phys_size);
-                        unsafe {
-                            gl::Viewport(0, 0, phys_size.width as i32, phys_size.height as i32);
-                        }
                     }
                     glutin::WindowEvent::KeyboardInput { input, .. } => {
                         keyboard_events.push(*input);
@@ -296,15 +294,23 @@ impl Rendertoy {
         F: FnMut(&mut Snapshot, &FrameState),
     {
         with_snapshot(|snapshot| {
-            unsafe {
-                //gl::ClearColor(t.sin().abs(), 1.0, 0.1, 0.0);
-                gl::Clear(gl::COLOR_BUFFER_BIT);
-            }
+            //unsafe {
+            //gl::ClearColor(1.0, 1.0, 1.0, 1.0);
+            //gl::Clear(gl::COLOR_BUFFER_BIT);
+            //}
+
+            let size = self
+                .gl_window
+                .get_inner_size()
+                .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
+                .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
+            let window_size_pixels = (size.width as u32, size.height as u32);
 
             let state = FrameState {
                 mouse: &self.mouse_state,
                 keys: &self.keyboard,
                 gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
+                window_size_pixels,
             };
 
             callback(snapshot, &state);
@@ -362,6 +368,6 @@ impl Rendertoy {
     }
 }
 
-pub fn draw_fullscreen_texture(tex: &Texture) {
-    backend::draw::draw_fullscreen_texture(tex.texture_id);
+pub fn draw_fullscreen_texture(tex: &Texture, framebuffer_size: (u32, u32)) {
+    backend::draw::draw_fullscreen_texture(tex.texture_id, framebuffer_size);
 }

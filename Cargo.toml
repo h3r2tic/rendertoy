@@ -24,3 +24,4 @@ cargo = "0.32.0"
 clap = "2.32.0"
 nalgebra = { version = "0.17",  features = ["serde-serialize"] }
 libflate = "0.1.19"
+typemap = "0.3.3"
