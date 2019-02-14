@@ -100,3 +100,46 @@ snoozy! {
         Ok(obj.vertices)
     }
 }
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct RasterGpuVertex {
+    pos: [f32; 3],
+    normal: u32,
+}
+
+fn pack_unit_direction_11_10_11(x: f32, y: f32, z: f32) -> u32 {
+    let x = ((x.max(-1.0).min(1.0) * 0.5 + 0.5) * ((1u32 << 11u32) - 1u32) as f32) as u32;
+    let y = ((y.max(-1.0).min(1.0) * 0.5 + 0.5) * ((1u32 << 10u32) - 1u32) as f32) as u32;
+    let z = ((z.max(-1.0).min(1.0) * 0.5 + 0.5) * ((1u32 << 11u32) - 1u32) as f32) as u32;
+
+    (z << 21) | (y << 11) | x
+}
+
+snoozy! {
+    fn make_raster_mesh(
+        ctx: &mut Context,
+        mesh: &SnoozyRef<Vec<Triangle>>
+    ) -> Result<ShaderUniformBundle> {
+        let mesh = ctx.get(mesh)?;
+        let mut verts: Vec<RasterGpuVertex> = Vec::with_capacity(mesh.len() * 3);
+
+        for tri in mesh.iter() {
+            let e0 = tri.b - tri.a;
+            let e1 = tri.c - tri.a;
+            let n = e0.cross(&e1).normalize();
+
+            for v in &[&tri.a, &tri.b, &tri.c] {
+                verts.push(RasterGpuVertex {
+                    pos: [v.x, v.y, v.z],
+                    normal: pack_unit_direction_11_10_11(n.x, n.y, n.z),
+                });
+            }
+        }
+
+        Ok(shader_uniforms!(
+            "mesh_vertex_buf": upload_buffer(to_byte_vec(verts)),
+            "mesh_index_count": (mesh.len() * 3) as u32
+        ))
+    }
+}

@@ -88,7 +88,6 @@ pub fn create_transient<Res: TransientResource>(desc: Res::Desc) -> Res {
     let existing = res_cache.entry(desc).or_default();
 
     let alloc = if existing.is_empty() {
-        println!("Allocating new resource");
         TransientResourceAllocation {
             key: TransientResourceKey(desc),
             payload: Res::allocate_payload(desc),
