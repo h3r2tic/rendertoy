@@ -198,7 +198,7 @@ impl<CameraType: Camera> CameraConvergenceEnforcer<CameraType> {
             camera,
             prev_matrices: matrices.clone(),
             frozen_matrices: matrices,
-            prev_error: 0.0,
+            prev_error: -1.0,
             is_converged: true,
         }
     }
