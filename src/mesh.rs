@@ -117,7 +117,7 @@ pub fn make_raster_mesh(
     }
 
     Ok(shader_uniforms!(
-        "mesh_vertex_buf": upload_buffer(to_byte_vec(verts)),
+        "mesh_vertex_buf": upload_array_buffer(verts),
         "mesh_index_count": (mesh.len() * 3) as u32
     ))
 }

@@ -3,11 +3,14 @@ pub use crate::backend::buffer::{Buffer, BufferKey};
 use crate::backend;
 
 use snoozy::*;
+use std::mem::size_of;
 
 #[snoozy]
-pub fn upload_buffer(_ctx: &mut Context, contents: &Vec<u8>) -> Result<Buffer> {
+pub fn upload_buffer<T: Copy + Send + 'static>(_ctx: &mut Context, contents: &T) -> Result<Buffer> {
+    let size_of_t = size_of::<T>();
+
     let res = backend::buffer::create_buffer(BufferKey {
-        size_bytes: contents.len(),
+        size_bytes: size_of_t,
     });
 
     unsafe {
@@ -15,8 +18,32 @@ pub fn upload_buffer(_ctx: &mut Context, contents: &Vec<u8>) -> Result<Buffer> {
         gl::BufferSubData(
             gl::SHADER_STORAGE_BUFFER,
             0,
-            contents.len() as isize,
-            contents.as_ptr() as *const std::ffi::c_void,
+            size_of_t as isize,
+            std::mem::transmute(contents),
+        );
+    }
+
+    Ok(res)
+}
+
+#[snoozy]
+pub fn upload_array_buffer<T: Copy + Send + 'static>(
+    _ctx: &mut Context,
+    contents: &Vec<T>,
+) -> Result<Buffer> {
+    let size_of_t = size_of::<T>();
+
+    let res = backend::buffer::create_buffer(BufferKey {
+        size_bytes: contents.len() * size_of_t,
+    });
+
+    unsafe {
+        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
+        gl::BufferSubData(
+            gl::SHADER_STORAGE_BUFFER,
+            0,
+            (contents.len() * size_of_t) as isize,
+            contents.as_ptr() as *const T as *const std::ffi::c_void,
         );
     }
 
