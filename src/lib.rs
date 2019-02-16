@@ -44,6 +44,8 @@ extern crate failure;
 extern crate serde_derive;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate snoozy_macros;
 
 use glutin::dpi::*;
 use glutin::GlContext;

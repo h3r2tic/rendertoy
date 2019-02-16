@@ -4,24 +4,23 @@ use crate::backend;
 
 use snoozy::*;
 
-snoozy! {
-    fn upload_buffer(_ctx: &mut Context, contents: &Vec<u8>) -> Result<Buffer> {
-        let res = backend::buffer::create_buffer(BufferKey {
-            size_bytes: contents.len(),
-        });
+#[snoozy]
+pub fn upload_buffer(_ctx: &mut Context, contents: &Vec<u8>) -> Result<Buffer> {
+    let res = backend::buffer::create_buffer(BufferKey {
+        size_bytes: contents.len(),
+    });
 
-        unsafe {
-            gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-            gl::BufferSubData(
-                gl::SHADER_STORAGE_BUFFER,
-                0,
-                contents.len() as isize,
-                contents.as_ptr() as *const std::ffi::c_void,
-            );
-        }
-
-        Ok(res)
+    unsafe {
+        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
+        gl::BufferSubData(
+            gl::SHADER_STORAGE_BUFFER,
+            0,
+            contents.len() as isize,
+            contents.as_ptr() as *const std::ffi::c_void,
+        );
     }
+
+    Ok(res)
 }
 
 pub fn to_byte_vec<T>(mut v: Vec<T>) -> Vec<u8>

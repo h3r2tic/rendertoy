@@ -16,11 +16,15 @@ pub struct TexParams {
     pub gamma: TexGamma,
 }
 
-snoozy! {
-    fn load_tex(ctx: &mut Context, path: &AssetPath) -> Result<Texture> {
-        let tex = ctx.get(load_tex_with_params(path.clone(), TexParams { gamma: TexGamma::Srgb }))?;
-        Ok((*tex).clone())
-    }
+#[snoozy]
+pub fn load_tex(ctx: &mut Context, path: &AssetPath) -> Result<Texture> {
+    let tex = ctx.get(load_tex_with_params(
+        path.clone(),
+        TexParams {
+            gamma: TexGamma::Srgb,
+        },
+    ))?;
+    Ok((*tex).clone())
 }
 
 fn make_gl_tex<Img>(
@@ -55,27 +59,42 @@ where
     Ok(res)
 }
 
-snoozy! {
-    fn load_tex_with_params(ctx: &mut Context, path: &AssetPath, params: &TexParams) -> Result<Texture> {
-        use image::{DynamicImage, GenericImageView};
+#[snoozy]
+pub fn load_tex_with_params(
+    ctx: &mut Context,
+    path: &AssetPath,
+    params: &TexParams,
+) -> Result<Texture> {
+    use image::{DynamicImage, GenericImageView};
 
-        let blob = ctx.get(&load_blob(path.clone()))?;
-        let img = image::load_from_memory(&blob.contents)?;
+    let blob = ctx.get(&load_blob(path.clone()))?;
+    let img = image::load_from_memory(&blob.contents)?;
 
-        let dims = img.dimensions();
-        println!("Loaded image: {:?} {:?}", dims, img.color());
+    let dims = img.dimensions();
+    println!("Loaded image: {:?} {:?}", dims, img.color());
 
-        match img {
-            DynamicImage::ImageLuma8(ref img) => {
-                make_gl_tex(img, dims, gl::R8, gl::RED)
+    match img {
+        DynamicImage::ImageLuma8(ref img) => make_gl_tex(img, dims, gl::R8, gl::RED),
+        DynamicImage::ImageRgb8(ref img) => make_gl_tex(
+            img,
+            dims,
+            if params.gamma == TexGamma::Linear {
+                gl::RGB8
+            } else {
+                gl::SRGB8
             },
-            DynamicImage::ImageRgb8(ref img) => {
-                make_gl_tex(img, dims, if params.gamma == TexGamma::Linear { gl::RGB8 } else { gl::SRGB8 }, gl::RGB)
+            gl::RGB,
+        ),
+        DynamicImage::ImageRgba8(ref img) => make_gl_tex(
+            img,
+            dims,
+            if params.gamma == TexGamma::Linear {
+                gl::RGBA8
+            } else {
+                gl::SRGB8_ALPHA8
             },
-            DynamicImage::ImageRgba8(ref img) => {
-                make_gl_tex(img, dims, if params.gamma == TexGamma::Linear { gl::RGBA8 } else { gl::SRGB8_ALPHA8 }, gl::RGBA)
-            },
-            _ => Err(format_err!("Unsupported image format"))
-        }
+            gl::RGBA,
+        ),
+        _ => Err(format_err!("Unsupported image format")),
     }
 }

@@ -3,26 +3,6 @@ use super::*;
 use obj::raw::object::Polygon;
 use obj::*;
 
-/*
-use std::io;
-
-pub struct Mesh {
-    #[allow(dead_code)]
-    models: Vec<tobj::Model>,
-}
-
-snoozy! {
-    fn load_mesh(ctx: &mut Context, blob: &SnoozyRef<Blob>) -> Result<Mesh> {
-        let m = tobj::load_obj_buf(&mut io::Cursor::new(&ctx.get(blob)?.contents), |_| {
-            Ok((Default::default(), Default::default()))
-        })?;
-
-        let (models, _materials) = m;
-        Ok(Mesh { models: models })
-    }
-}
-*/
-
 #[derive(Serialize)]
 pub struct Triangle {
     pub a: Point3,
@@ -79,26 +59,25 @@ impl FromRawVertex for Triangle {
     }
 }
 
-snoozy! {
-    fn load_obj_scene(_ctx: &mut Context, path: &String) -> Result<Vec<Triangle>> {
-        use libflate::gzip::Decoder;
-        use std::fs::File;
-        use std::io::{BufRead, BufReader};
-        use std::path::Path;
+#[snoozy]
+pub fn load_obj_scene(_ctx: &mut Context, path: &String) -> Result<Vec<Triangle>> {
+    use libflate::gzip::Decoder;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use std::path::Path;
 
-        let f = BufReader::new(File::open(path)?);
+    let f = BufReader::new(File::open(path)?);
 
-        let f: Box<dyn BufRead> = if Path::new(path).extension().unwrap() == "gz" {
-            let f = Decoder::new(f).unwrap();
-            Box::new(std::io::BufReader::new(f))
-        } else {
-            Box::new(f)
-        };
+    let f: Box<dyn BufRead> = if Path::new(path).extension().unwrap() == "gz" {
+        let f = Decoder::new(f).unwrap();
+        Box::new(std::io::BufReader::new(f))
+    } else {
+        Box::new(f)
+    };
 
-        let obj: Obj<Triangle> = load_obj(f)?;
+    let obj: Obj<Triangle> = load_obj(f)?;
 
-        Ok(obj.vertices)
-    }
+    Ok(obj.vertices)
 }
 
 #[derive(Clone, Copy)]
@@ -116,30 +95,29 @@ fn pack_unit_direction_11_10_11(x: f32, y: f32, z: f32) -> u32 {
     (z << 21) | (y << 11) | x
 }
 
-snoozy! {
-    fn make_raster_mesh(
-        ctx: &mut Context,
-        mesh: &SnoozyRef<Vec<Triangle>>
-    ) -> Result<ShaderUniformBundle> {
-        let mesh = ctx.get(mesh)?;
-        let mut verts: Vec<RasterGpuVertex> = Vec::with_capacity(mesh.len() * 3);
+#[snoozy]
+pub fn make_raster_mesh(
+    ctx: &mut Context,
+    mesh: &SnoozyRef<Vec<Triangle>>,
+) -> Result<ShaderUniformBundle> {
+    let mesh = ctx.get(mesh)?;
+    let mut verts: Vec<RasterGpuVertex> = Vec::with_capacity(mesh.len() * 3);
 
-        for tri in mesh.iter() {
-            let e0 = tri.b - tri.a;
-            let e1 = tri.c - tri.a;
-            let n = e0.cross(&e1).normalize();
+    for tri in mesh.iter() {
+        let e0 = tri.b - tri.a;
+        let e1 = tri.c - tri.a;
+        let n = e0.cross(&e1).normalize();
 
-            for v in &[&tri.a, &tri.b, &tri.c] {
-                verts.push(RasterGpuVertex {
-                    pos: [v.x, v.y, v.z],
-                    normal: pack_unit_direction_11_10_11(n.x, n.y, n.z),
-                });
-            }
+        for v in &[&tri.a, &tri.b, &tri.c] {
+            verts.push(RasterGpuVertex {
+                pos: [v.x, v.y, v.z],
+                normal: pack_unit_direction_11_10_11(n.x, n.y, n.z),
+            });
         }
-
-        Ok(shader_uniforms!(
-            "mesh_vertex_buf": upload_buffer(to_byte_vec(verts)),
-            "mesh_index_count": (mesh.len() * 3) as u32
-        ))
     }
+
+    Ok(shader_uniforms!(
+        "mesh_vertex_buf": upload_buffer(to_byte_vec(verts)),
+        "mesh_index_count": (mesh.len() * 3) as u32
+    ))
 }

@@ -8,23 +8,24 @@ pub struct Blob {
     pub contents: Vec<u8>,
 }
 
-snoozy! {
-    fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
-        let mut buffer = Vec::new();
+#[snoozy]
+pub fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
+    let mut buffer = Vec::new();
 
-        let mut file_path: PathBuf = (*ctx.get(get_cargo_package_dep_path(path.crate_name.clone()))?).clone().into();
-        file_path.push("assets");
-        file_path.push(&path.asset_name);
+    let mut file_path: PathBuf = (*ctx.get(get_cargo_package_dep_path(path.crate_name.clone()))?)
+        .clone()
+        .into();
+    file_path.push("assets");
+    file_path.push(&path.asset_name);
 
-        let file_path = &file_path.to_string_lossy().to_string();
+    let file_path = &file_path.to_string_lossy().to_string();
 
-        println!("Loading {}\n    -> {}", path, file_path);
+    println!("Loading {}\n    -> {}", path, file_path);
 
-        std::io::Read::read_to_end(&mut File::open(file_path)?, &mut buffer)?;
-        crate::backend::file::watch_file(file_path, ctx.get_invalidation_trigger());
+    std::io::Read::read_to_end(&mut File::open(file_path)?, &mut buffer)?;
+    crate::backend::file::watch_file(file_path, ctx.get_invalidation_trigger());
 
-        Ok(Blob { contents: buffer })
-    }
+    Ok(Blob { contents: buffer })
 }
 
 #[derive(Serialize, Debug, Clone)]
