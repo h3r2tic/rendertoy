@@ -21,6 +21,7 @@ pub fn upload_buffer<T: Copy + Send + 'static>(_ctx: &mut Context, contents: &T)
             size_of_t as isize,
             std::mem::transmute(contents),
         );
+        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     }
 
     Ok(res)
@@ -45,6 +46,7 @@ pub fn upload_array_buffer<T: Copy + Send + 'static>(
             (contents.len() * size_of_t) as isize,
             contents.as_ptr() as *const T as *const std::ffi::c_void,
         );
+        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     }
 
     Ok(res)

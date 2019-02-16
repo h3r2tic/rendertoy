@@ -133,6 +133,7 @@ impl Camera for FirstPersonCamera {
         let rot_interp = 1.0 - (-time * 30.0).exp();
         let pos_interp = 1.0 - (-time * 16.0).exp();
         self.interp_rot = self.interp_rot.slerp(&target_quat, rot_interp);
+        self.interp_rot.renormalize();
         self.interp_pos = self
             .interp_pos
             .coords
@@ -178,7 +179,6 @@ impl Camera for FirstPersonCamera {
                 -self.interp_pos.y,
                 -self.interp_pos.z,
             ));
-
             rotation.transpose() * inv_translation
         };
 

@@ -1,3 +1,5 @@
+#![feature(core_intrinsics)]
+
 mod backend;
 mod blob;
 mod buffer;
