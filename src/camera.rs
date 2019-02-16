@@ -137,8 +137,7 @@ impl Camera for FirstPersonCamera {
         let target_quat = self.calc_rotation_quat();
         let rot_interp = 1.0 - (-time * 30.0).exp();
         let pos_interp = 1.0 - (-time * 16.0).exp();
-        //self.interp_rot = self.interp_rot.slerp(&target_quat, rot_interp);
-        self.interp_rot = target_quat;//self.interp_rot.slerp(&target_quat, rot_interp);
+        self.interp_rot = self.interp_rot.slerp(&target_quat, rot_interp);
         self.interp_rot.renormalize();
         self.interp_pos = self
             .interp_pos
