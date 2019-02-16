@@ -41,6 +41,11 @@ pub struct FirstPersonCameraInput {
     pitch_delta: f32,
 }
 
+fn highp_invert_matrix(m: &Matrix4) -> Option<Matrix4> {
+    let m: na::Matrix4<f64> = na::convert(*m);
+    m.try_inverse().map(|m| na::convert::<_, na::Matrix4<f32>>(m))
+}
+
 impl<'a> From<&FrameState<'a>> for FirstPersonCameraInput {
     fn from(frame_state: &FrameState<'a>) -> FirstPersonCameraInput {
         let mut yaw_delta = 0.0;
@@ -154,11 +159,6 @@ impl Camera for FirstPersonCamera {
             m.m22 = h;
             m.m34 = znear;
             m.m43 = -1.0;
-
-            // Temporal jitter
-            //m.m13 = (1.0 * rng.sample(StandardNormal)) as f32 / width as f32;
-            //m.m23 = (1.0 * rng.sample(StandardNormal)) as f32 / height as f32;
-
             m
         };
 
@@ -173,14 +173,7 @@ impl Camera for FirstPersonCamera {
             translation * rotation
         };
 
-        let world_to_view = {
-            let inv_translation = Matrix4::new_translation(&Vector3::new(
-                -self.interp_pos.x,
-                -self.interp_pos.y,
-                -self.interp_pos.z,
-            ));
-            rotation.transpose() * inv_translation
-        };
+        let world_to_view = highp_invert_matrix(&view_to_world).unwrap();
 
         CameraMatrices {
             view_to_clip: view_to_clip,
