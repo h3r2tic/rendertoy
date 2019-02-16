@@ -297,31 +297,32 @@ impl Rendertoy {
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
+        //unsafe {
+        //gl::ClearColor(1.0, 1.0, 1.0, 1.0);
+        //gl::Clear(gl::COLOR_BUFFER_BIT);
+        //}
+
+        let size = self
+            .gl_window
+            .get_inner_size()
+            .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
+            .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
+        let window_size_pixels = (size.width as u32, size.height as u32);
+
+        let state = FrameState {
+            mouse: &self.mouse_state,
+            keys: &self.keyboard,
+            gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
+            window_size_pixels,
+        };
+
+        let tex = callback(&state);
+
         with_snapshot(|snapshot| {
-            //unsafe {
-            //gl::ClearColor(1.0, 1.0, 1.0, 1.0);
-            //gl::Clear(gl::COLOR_BUFFER_BIT);
-            //}
-
-            let size = self
-                .gl_window
-                .get_inner_size()
-                .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
-                .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
-            let window_size_pixels = (size.width as u32, size.height as u32);
-
-            let state = FrameState {
-                mouse: &self.mouse_state,
-                keys: &self.keyboard,
-                gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
-                window_size_pixels,
-            };
-
-            let tex = callback(&state);
             draw_fullscreen_texture(&*snapshot.get(tex), state.window_size_pixels);
+        });
 
-            self.next_frame()
-        })
+        self.next_frame()
     }
 
     pub fn draw_forever<F>(&mut self, mut callback: F)
