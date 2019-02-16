@@ -477,7 +477,7 @@ pub fn raster_tex(
     let depth_buffer = create_render_buffer(RenderBufferKey {
         width: key.width,
         height: key.height,
-        format: gl::DEPTH_COMPONENT24,
+        format: gl::DEPTH_COMPONENT32F,
     });
 
     let fb_handle = {
