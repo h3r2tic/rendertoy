@@ -3,7 +3,7 @@ use super::*;
 use obj::raw::object::Polygon;
 use obj::*;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Triangle {
     pub a: Point3,
     pub b: Point3,

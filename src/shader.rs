@@ -49,7 +49,7 @@ pub struct ShaderUniformHolder {
 impl ShaderUniformHolder {
     pub fn new<T: Into<ShaderUniformValue> + 'static>(name: &str, value: T) -> ShaderUniformHolder {
         let mut s = DefaultSnoozyHash::default();
-        calculate_serialized_hash(&value, &mut s);
+        whatever_hash(&value, &mut s);
         let shallow_hash = std::hash::Hasher::finish(&mut s);
 
         let value = value.into();
