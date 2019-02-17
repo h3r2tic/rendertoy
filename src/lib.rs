@@ -196,6 +196,7 @@ impl Rendertoy {
 
             gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);
             gl::Enable(gl::FRAMEBUFFER_SRGB);
+            gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
 
             let mut vao: u32 = 0;
             gl::GenVertexArrays(1, &mut vao);
