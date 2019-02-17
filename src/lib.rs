@@ -48,6 +48,8 @@ extern crate serde_derive;
 extern crate lazy_static;
 #[macro_use]
 extern crate snoozy_macros;
+#[macro_use]
+extern crate abomonation_derive;
 
 use glutin::dpi::*;
 use glutin::GlContext;

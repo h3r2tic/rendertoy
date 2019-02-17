@@ -80,9 +80,9 @@ pub fn load_obj_scene(_ctx: &mut Context, path: &String) -> Result<Vec<Triangle>
     Ok(obj.vertices)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Abomonation)]
 #[repr(C)]
-struct RasterGpuVertex {
+pub struct RasterGpuVertex {
     pos: [f32; 3],
     normal: u32,
 }
@@ -95,11 +95,17 @@ fn pack_unit_direction_11_10_11(x: f32, y: f32, z: f32) -> u32 {
     (z << 21) | (y << 11) | x
 }
 
+#[derive(Clone, Abomonation)]
+pub struct RasterGpuMesh {
+    verts: Vec<RasterGpuVertex>,
+    index_count: u32,
+}
+
 #[snoozy]
 pub fn make_raster_mesh(
     ctx: &mut Context,
     mesh: &SnoozyRef<Vec<Triangle>>,
-) -> Result<ShaderUniformBundle> {
+) -> Result<RasterGpuMesh> {
     let mesh = ctx.get(mesh)?;
     let mut verts: Vec<RasterGpuVertex> = Vec::with_capacity(mesh.len() * 3);
 
@@ -116,8 +122,21 @@ pub fn make_raster_mesh(
         }
     }
 
+    Ok(RasterGpuMesh {
+        verts,
+        index_count: (mesh.len() * 3) as u32,
+    })
+}
+
+#[snoozy]
+pub fn upload_raster_mesh(
+    ctx: &mut Context,
+    mesh: &SnoozyRef<RasterGpuMesh>,
+) -> Result<ShaderUniformBundle> {
+    let mesh = ctx.get(mesh)?;
+
     Ok(shader_uniforms!(
-        "mesh_vertex_buf": upload_array_buffer(verts),
-        "mesh_index_count": (mesh.len() * 3) as u32
+        "mesh_vertex_buf": upload_array_buffer(mesh.verts.clone()),
+        "mesh_index_count": mesh.index_count as u32
     ))
 }

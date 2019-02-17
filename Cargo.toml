@@ -27,3 +27,5 @@ clap = "2.32.0"
 nalgebra = { version = "0.17",  features = ["serde-serialize"] }
 libflate = "0.1.19"
 typemap = "0.3.3"
+abomonation = "0.7"
+abomonation_derive = "0.3"
