@@ -830,6 +830,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kdtree"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "num-traits 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "kernel32-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1543,6 +1551,7 @@ dependencies = [
  "gl 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "glutin 0.19.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "image 0.20.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kdtree 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libflate 0.1.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra 0.17.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2262,6 +2271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum itoa 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)" = "1306f3464951f30e30d12373d31c79fbd52d236e5e896fd92f96ec7babbbe60b"
 "checksum jobserver 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)" = "dd80e58f77e0cdea53ba96acc5e04479e5ffc5d869626a6beafe50fed867eace"
 "checksum jpeg-decoder 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)" = "c8b7d43206b34b3f94ea9445174bda196e772049b9bddbc620c9d29b2d20110d"
+"checksum kdtree 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b63d659081717fe428fbaf9549559083956450194e57e8d28498a0dfa31b3b04"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 "checksum khronos_api 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "62237e6d326bd5871cd21469323bf096de81f1618cd82cbaf5d87825335aeb49"
 "checksum lazy_static 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a374c89b9db55895453a74c1e38861d9deec0b01b405a82516e9d5de4820dea1"

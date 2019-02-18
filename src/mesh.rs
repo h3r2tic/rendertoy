@@ -3,6 +3,9 @@ use super::*;
 use obj::raw::object::Polygon;
 use obj::*;
 
+use kdtree::distance::squared_euclidean;
+use kdtree::KdTree;
+
 #[derive(Serialize, Deserialize)]
 pub struct Triangle {
     pub a: Point3,
@@ -101,6 +104,69 @@ pub struct RasterGpuMesh {
     index_count: u32,
 }
 
+#[derive(Clone, Copy)]
+pub struct TriangleNormals {
+    pub a: Vector3,
+    pub b: Vector3,
+    pub c: Vector3,
+}
+
+fn calculate_vertex_normals(mesh: &Vec<Triangle>) -> Vec<TriangleNormals> {
+    let mut kdtree = KdTree::new(3);
+
+    let eps = 1e-3_f32;
+    let eps2 = eps * eps;
+
+    let get_equivalent = |kdtree: &KdTree<_, _, _>, pt: [f32; 3]| {
+        for (nearest_dist2, nearest_i) in kdtree.iter_nearest(&pt, &squared_euclidean).unwrap() {
+            // TODO: normal cutoff
+            if nearest_dist2 < eps2 {
+                return Some(*nearest_i);
+            } else {
+                break;
+            }
+        }
+        None
+    };
+
+    let mut vert_normals = vec![Vector3::zeros(); mesh.len() * 3];
+
+    for (tri_i, tri) in mesh.iter().enumerate() {
+        let e0 = tri.b - tri.a;
+        let e1 = tri.c - tri.a;
+        let n = e0.cross(&e1).normalize();
+
+        for (v_i, v) in [&tri.a, &tri.b, &tri.c].iter().enumerate() {
+            let pt = [v.x, v.y, v.z];
+            let pt_i = tri_i * 3 + v_i;
+
+            if let Some(ei) = get_equivalent(&kdtree, pt) {
+                vert_normals[ei] += n;
+            } else {
+                vert_normals[pt_i] = n;
+                kdtree.add(pt, pt_i).unwrap();
+            }
+        }
+    }
+
+    let mut triangle_normals: Vec<TriangleNormals> =
+        unsafe { vec![std::mem::uninitialized(); mesh.len()] };
+
+    let get_vn = |v: &Point3| {
+        let pt = [v.x, v.y, v.z];
+        vert_normals[get_equivalent(&kdtree, pt).expect("fetching calculated vertex normal")]
+            .normalize()
+    };
+
+    for (tri_i, tri) in mesh.iter().enumerate() {
+        triangle_normals[tri_i].a = get_vn(&tri.a);
+        triangle_normals[tri_i].b = get_vn(&tri.b);
+        triangle_normals[tri_i].c = get_vn(&tri.c);
+    }
+
+    triangle_normals
+}
+
 #[snoozy]
 pub fn make_raster_mesh(
     ctx: &mut Context,
@@ -108,13 +174,15 @@ pub fn make_raster_mesh(
 ) -> Result<RasterGpuMesh> {
     let mesh = ctx.get(mesh)?;
     let mut verts: Vec<RasterGpuVertex> = Vec::with_capacity(mesh.len() * 3);
+    let normals = calculate_vertex_normals(&*mesh);
 
-    for tri in mesh.iter() {
-        let e0 = tri.b - tri.a;
-        let e1 = tri.c - tri.a;
-        let n = e0.cross(&e1).normalize();
+    for (tri_i, tri) in mesh.iter().enumerate() {
+        //let e0 = tri.b - tri.a;
+        //let e1 = tri.c - tri.a;
+        //let n = e0.cross(&e1).normalize();
+        let n: &TriangleNormals = &normals[tri_i];
 
-        for v in &[&tri.a, &tri.b, &tri.c] {
+        for (v, n) in &[(&tri.a, &n.a), (&tri.b, &n.b), (&tri.c, &n.c)] {
             verts.push(RasterGpuVertex {
                 pos: [v.x, v.y, v.z],
                 normal: pack_unit_direction_11_10_11(n.x, n.y, n.z),
