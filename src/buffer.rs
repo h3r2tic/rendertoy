@@ -27,31 +27,6 @@ pub fn upload_buffer<T: Copy + Send + 'static>(_ctx: &mut Context, contents: &T)
     Ok(res)
 }
 
-/*#[snoozy]
-pub fn upload_array_buffer<T: Copy + Send + 'static>(
-    _ctx: &mut Context,
-    contents: &Vec<T>,
-) -> Result<Buffer> {
-    let size_of_t = size_of::<T>();
-
-    let res = backend::buffer::create_buffer(BufferKey {
-        size_bytes: contents.len() * size_of_t,
-    });
-
-    unsafe {
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-        gl::BufferSubData(
-            gl::SHADER_STORAGE_BUFFER,
-            0,
-            (contents.len() * size_of_t) as isize,
-            contents.as_ptr() as *const T as *const std::ffi::c_void,
-        );
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
-    }
-
-    Ok(res)
-}*/
-
 use std::ops::Deref;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -99,31 +74,6 @@ impl<T: 'static, OwnerT> std::hash::Hash for ArcView<T, OwnerT> {
         whatever_hash(unsafe { self.child.as_ref() }, state);
     }
 }
-
-/*#[snoozy]
-pub fn upload_shared_array_buffer<O: Send + Sync + 'static, T: Copy + Send + Sync + 'static>(
-    _ctx: &mut Context,
-    contents: &ArcView<Vec<T>, O>,
-) -> Result<Buffer> {
-    let size_of_t = size_of::<T>();
-
-    let res = backend::buffer::create_buffer(BufferKey {
-        size_bytes: contents.len() * size_of_t,
-    });
-
-    unsafe {
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-        gl::BufferSubData(
-            gl::SHADER_STORAGE_BUFFER,
-            0,
-            (contents.len() * size_of_t) as isize,
-            contents.as_ptr() as *const T as *const std::ffi::c_void,
-        );
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
-    }
-
-    Ok(res)
-}*/
 
 #[snoozy]
 pub fn upload_array_buffer<
