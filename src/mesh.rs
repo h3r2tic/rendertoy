@@ -135,8 +135,10 @@ pub fn upload_raster_mesh(
 ) -> Result<ShaderUniformBundle> {
     let mesh = ctx.get(mesh)?;
 
+    let verts = ArcView::new(&mesh, |m| &m.verts);
+
     Ok(shader_uniforms!(
-        "mesh_vertex_buf": upload_array_buffer(mesh.verts.clone()),
+        "mesh_vertex_buf": upload_array_buffer(verts),
         "mesh_index_count": mesh.index_count as u32
     ))
 }
