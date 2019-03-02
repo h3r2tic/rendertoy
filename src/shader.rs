@@ -1,7 +1,8 @@
-use super::blob::*;
-use super::buffer::Buffer;
-use super::texture::{Texture, TextureKey};
 use crate::backend::{self, render_buffer::*};
+use crate::blob::*;
+use crate::buffer::Buffer;
+use crate::gpu_profiler;
+use crate::texture::{Texture, TextureKey};
 use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
 use snoozy::*;
@@ -74,6 +75,7 @@ macro_rules! shader_uniforms {
 }
 
 pub struct ComputeShader {
+    pub name: String,
     handle: u32,
 }
 
@@ -141,9 +143,14 @@ pub fn load_cs(ctx: &mut Context, path: &AssetPath) -> Result<ComputeShader> {
     )?;
 
     let shader_handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
+    let name = std::path::Path::new(&path.asset_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or("unknown".to_string());
 
     Ok(ComputeShader {
         handle: backend::shader::make_program(&[shader_handle])?,
+        name,
     })
 }
 
@@ -427,11 +434,13 @@ pub fn compute_tex(
             &mut work_group_size[0],
         );
 
-        gl::DispatchCompute(
-            (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
-            (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
-            1,
-        );
+        gpu_profiler::profile(&cs.name, || {
+            gl::DispatchCompute(
+                (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
+                (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
+                1,
+            )
+        });
 
         for i in 0..img_unit {
             gl::ActiveTexture(gl::TEXTURE0 + i as u32);

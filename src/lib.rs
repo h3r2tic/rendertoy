@@ -5,6 +5,7 @@ mod blob;
 mod buffer;
 mod camera;
 mod consts;
+mod gpu_profiler;
 mod keyboard;
 mod mesh;
 mod package;
@@ -51,11 +52,10 @@ extern crate snoozy_macros;
 #[macro_use]
 extern crate abomonation_derive;
 
+use clap::ArgMatches;
 use glutin::dpi::*;
 use glutin::GlContext;
-
-use clap::ArgMatches;
-
+use nanovg::{Alignment, Color, Font, TextOptions, Transform};
 use std::str::FromStr;
 
 extern "system" fn gl_debug_message(
@@ -83,13 +83,17 @@ extern "system" fn gl_debug_message(
     }
 }
 
+struct GlState {
+    vao: u32,
+}
+
 pub struct Rendertoy {
     events_loop: glutin::EventsLoop,
     gl_window: glutin::GlWindow,
     mouse_state: MouseState,
-    last_timing_query_elapsed: u64,
     cfg: RendertoyConfig,
     keyboard: KeyboardState,
+    gl_state: GlState,
 }
 
 #[derive(Clone)]
@@ -120,7 +124,6 @@ impl MouseState {
 pub struct FrameState<'a> {
     pub mouse: &'a MouseState,
     pub keys: &'a KeyboardState,
-    pub gpu_time_ms: f64,
     pub window_size_pixels: (u32, u32),
 }
 
@@ -165,7 +168,8 @@ impl Rendertoy {
         let context = glutin::ContextBuilder::new()
             .with_vsync(true)
             .with_gl_debug_flag(true)
-            .with_gl_profile(glutin::GlProfile::Core)
+            .with_gl_profile(glutin::GlProfile::Compatibility) // nanovg doesn't work with Core.
+            //.with_gl_profile(glutin::GlProfile::Core)
             .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4, 3)));
         let gl_window = glutin::GlWindow::new(window, context, &events_loop).unwrap();
 
@@ -174,6 +178,8 @@ impl Rendertoy {
         }
 
         gl::load_with(|symbol| gl_window.get_proc_address(symbol) as *const _);
+
+        let mut vao: u32 = 0;
 
         unsafe {
             gl::DebugMessageCallback(gl_debug_message, std::ptr::null_mut());
@@ -196,20 +202,17 @@ impl Rendertoy {
 
             gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);
             gl::Enable(gl::FRAMEBUFFER_SRGB);
-            gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
 
-            let mut vao: u32 = 0;
             gl::GenVertexArrays(1, &mut vao);
-            gl::BindVertexArray(vao);
         }
 
         Rendertoy {
             events_loop,
             gl_window,
             mouse_state: MouseState::default(),
-            last_timing_query_elapsed: 0,
             cfg,
             keyboard: KeyboardState::new(),
+            gl_state: GlState { vao },
         }
     }
 
@@ -296,7 +299,7 @@ impl Rendertoy {
         running
     }
 
-    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F) -> bool
+    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
@@ -315,7 +318,6 @@ impl Rendertoy {
         let state = FrameState {
             mouse: &self.mouse_state,
             keys: &self.keyboard,
-            gpu_time_ms: self.last_timing_query_elapsed as f64 * 1e-6,
             window_size_pixels,
         };
 
@@ -324,55 +326,88 @@ impl Rendertoy {
         with_snapshot(|snapshot| {
             draw_fullscreen_texture(&*snapshot.get(tex), state.window_size_pixels);
         });
+    }
 
-        self.next_frame()
+    fn draw_profiling_stats(&self, vg_context: &nanovg::Context, font: &Font) {
+        let size = self
+            .gl_window
+            .get_inner_size()
+            .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
+            .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
+
+        let (width, height) = (size.width as i32, size.height as i32);
+
+        unsafe {
+            gl::Viewport(0, 0, width, height);
+        }
+
+        let (width, height) = (width as f32, height as f32);
+
+        vg_context.frame(
+            (width, height),
+            self.gl_window.get_hidpi_factor() as f32,
+            |frame| {
+                let transform = Transform::new();
+                let text_options = TextOptions {
+                    size: 28.0,
+                    color: Color::from_rgb(255, 255, 255),
+                    align: Alignment::new().bottom().left(),
+                    transform: Some(transform),
+                    ..Default::default()
+                };
+                let metrics = frame.text_metrics(*font, text_options);
+
+                let mut y = 10.0 + metrics.line_height;
+
+                gpu_profiler::with_stats(|stats| {
+                    for (name, scope) in stats.scopes.iter() {
+                        let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
+
+                        frame.text(*font, (10.0, y), text, text_options);
+                        y += metrics.line_height;
+                    }
+                });
+            },
+        );
     }
 
     pub fn draw_forever<F>(&mut self, mut callback: F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        let mut timing_query_handle = 0u32;
-        let mut timing_query_in_flight = false;
+        let vg_context = nanovg::ContextBuilder::new()
+            .stencil_strokes()
+            .build()
+            .expect("Initialization of NanoVG failed!");
 
-        unsafe {
-            gl::GenQueries(1, &mut timing_query_handle);
-        }
+        let mut font = None;
+        with_snapshot(|snapshot| {
+            let blob = &*snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf")));
+
+            font = Some(
+                Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
+                    .expect("Failed to load font 'Roboto-Regular.ttf'"),
+            );
+        });
+
+        let font = font.expect("Failed to load font");
 
         let mut running = true;
         while running {
             unsafe {
-                if timing_query_in_flight {
-                    let mut available: i32 = 0;
-                    gl::GetQueryObjectiv(
-                        timing_query_handle,
-                        gl::QUERY_RESULT_AVAILABLE,
-                        &mut available,
-                    );
-
-                    if available != 0 {
-                        timing_query_in_flight = false;
-                        gl::GetQueryObjectui64v(
-                            timing_query_handle,
-                            gl::QUERY_RESULT,
-                            &mut self.last_timing_query_elapsed,
-                        );
-                    }
-                }
-
-                if !timing_query_in_flight {
-                    gl::BeginQuery(gl::TIME_ELAPSED, timing_query_handle);
-                }
+                gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
+                gl::BindVertexArray(self.gl_state.vao);
+                gl::Disable(gl::CULL_FACE);
+                gl::Disable(gl::STENCIL_TEST);
+                gl::Disable(gl::BLEND);
             }
 
-            running = self.draw_with_frame_snapshot(&mut callback);
+            self.draw_with_frame_snapshot(&mut callback);
+            gpu_profiler::end_frame();
 
-            unsafe {
-                if !timing_query_in_flight {
-                    gl::EndQuery(gl::TIME_ELAPSED);
-                    timing_query_in_flight = true;
-                }
-            }
+            self.draw_profiling_stats(&vg_context, &font);
+
+            running = self.next_frame();
         }
     }
 }

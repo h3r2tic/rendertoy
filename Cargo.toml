@@ -30,3 +30,4 @@ typemap = "0.3.3"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 kdtree = "0.5"
+nanovg = { version = "1.0.2", features = ["gl3"] }
