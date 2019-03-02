@@ -349,12 +349,16 @@ impl Rendertoy {
             |frame| {
                 let transform = Transform::new();
                 let text_options = TextOptions {
-                    size: 28.0,
+                    size: 24.0,
                     color: Color::from_rgb(255, 255, 255),
                     align: Alignment::new().bottom().left(),
                     transform: Some(transform),
                     ..Default::default()
                 };
+                let mut text_shadow_options = text_options.clone();
+                text_shadow_options.color = Color::from_rgb(0, 0, 0);
+                text_shadow_options.blur = 1.0;
+
                 let metrics = frame.text_metrics(*font, text_options);
 
                 let mut y = 10.0 + metrics.line_height;
@@ -363,7 +367,8 @@ impl Rendertoy {
                     for (name, scope) in stats.scopes.iter() {
                         let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
 
-                        frame.text(*font, (10.0, y), text, text_options);
+                        frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
+                        frame.text(*font, (10.0, y), &text, text_options);
                         y += metrics.line_height;
                     }
                 });
