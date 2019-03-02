@@ -33,6 +33,10 @@ pub struct FirstPersonCamera {
 
     pub interp_rot: UnitQuaternion<f32>,
     pub interp_pos: Point3,
+
+    pub move_smoothness: f32,
+    pub look_smoothness: f32,
+    pub move_speed: f32,
 }
 
 pub struct FirstPersonCameraInput {
@@ -56,20 +60,19 @@ impl<'a> From<&FrameState<'a>> for FirstPersonCameraInput {
             pitch_delta = -0.1 * frame_state.mouse.delta.y;
         }
 
-        let move_speed = 12.0;
         let mut move_vec = Vector3::zeros();
 
         if frame_state.keys.is_down(VirtualKeyCode::W) {
-            move_vec.z += -move_speed;
+            move_vec.z += -1.0;
         }
         if frame_state.keys.is_down(VirtualKeyCode::S) {
-            move_vec.z += move_speed;
+            move_vec.z += 1.0;
         }
         if frame_state.keys.is_down(VirtualKeyCode::A) {
-            move_vec.x += -move_speed;
+            move_vec.x += -1.0;
         }
         if frame_state.keys.is_down(VirtualKeyCode::D) {
-            move_vec.x += move_speed;
+            move_vec.x += 1.0;
         }
 
         FirstPersonCameraInput {
@@ -97,7 +100,7 @@ impl FirstPersonCamera {
 
     fn translate(&mut self, local_v: &Vector3) {
         let rotation = self.calc_rotation_quat();
-        self.position += rotation * local_v;
+        self.position += rotation * local_v * self.move_speed;
     }
 
     fn calc_rotation_quat(&self) -> UnitQuaternion<f32> {
@@ -121,6 +124,9 @@ impl FirstPersonCamera {
             aspect: 1.6_f32,
             interp_rot: UnitQuaternion::from_axis_angle(&Vector3::y_axis(), -0.0f32.to_radians()),
             interp_pos: position,
+            move_smoothness: 1.0,
+            look_smoothness: 1.0,
+            move_speed: 12.0,
         }
     }
 }
@@ -135,8 +141,8 @@ impl Camera for FirstPersonCamera {
         self.rotate_yaw(input.yaw_delta);
 
         let target_quat = self.calc_rotation_quat();
-        let rot_interp = 1.0 - (-time * 30.0).exp();
-        let pos_interp = 1.0 - (-time * 16.0).exp();
+        let rot_interp = 1.0 - (-time * 30.0 / self.look_smoothness.max(1e-5)).exp();
+        let pos_interp = 1.0 - (-time * 16.0 / self.move_smoothness.max(1e-5)).exp();
         self.interp_rot = self.interp_rot.slerp(&target_quat, rot_interp);
         self.interp_rot.renormalize();
         self.interp_pos = self

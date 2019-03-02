@@ -13,6 +13,7 @@ pub fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
     let mut buffer = Vec::new();
 
     let mut file_path: PathBuf = (*ctx.get(get_cargo_package_dep_path(path.crate_name.clone()))?)
+        .0
         .clone()
         .into();
     file_path.push("assets");

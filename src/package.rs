@@ -46,17 +46,23 @@ pub fn load_cargo_package_map(_ctx: &mut Context) -> Result<CargoPackageMap> {
     })
 }
 
+// Explicitly not serializable, so that it doesn't end up auto-cached
+pub struct CargoDependencyPath(pub String);
+
 #[snoozy]
-pub fn get_cargo_package_dep_path(ctx: &mut Context, package: &String) -> Result<String> {
+pub fn get_cargo_package_dep_path(
+    ctx: &mut Context,
+    package: &String,
+) -> Result<CargoDependencyPath> {
     let map = ctx.get(load_cargo_package_map())?;
 
     if *package == map.name {
-        return Ok(map.path.clone());
+        return Ok(CargoDependencyPath(map.path.clone()));
     }
 
     for (name, path) in map.deps.iter() {
         if name == package {
-            return Ok(path.clone());
+            return Ok(CargoDependencyPath(path.clone()));
         }
     }
 

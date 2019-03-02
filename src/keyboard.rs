@@ -1,21 +1,21 @@
-pub use glutin::{VirtualKeyCode, KeyboardInput, ElementState};
+pub use glutin::{ElementState, KeyboardInput, VirtualKeyCode};
 use std::collections::HashMap;
 
 pub struct KeyState {
     ticks: u32,
-    seconds: f32
+    seconds: f32,
 }
 
 pub struct KeyboardState {
     keys_down: HashMap<VirtualKeyCode, KeyState>,
-    events: Vec<KeyboardInput>
+    events: Vec<KeyboardInput>,
 }
 
 impl KeyboardState {
     pub fn new() -> Self {
         Self {
             keys_down: HashMap::new(),
-            events: Vec::new()
+            events: Vec::new(),
         }
     }
 
@@ -37,7 +37,10 @@ impl KeyboardState {
         for event in &self.events {
             if let Some(vk) = event.virtual_keycode {
                 if event.state == ElementState::Pressed {
-                    self.keys_down.entry(vk).or_insert(KeyState {ticks: 0, seconds: 0.0});
+                    self.keys_down.entry(vk).or_insert(KeyState {
+                        ticks: 0,
+                        seconds: 0.0,
+                    });
                 } else {
                     self.keys_down.remove(&vk);
                 }
