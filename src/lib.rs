@@ -402,7 +402,7 @@ impl Rendertoy {
             unsafe {
                 gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
                 gl::BindVertexArray(self.gl_state.vao);
-                gl::Disable(gl::CULL_FACE);
+                gl::Enable(gl::CULL_FACE);
                 gl::Disable(gl::STENCIL_TEST);
                 gl::Disable(gl::BLEND);
             }

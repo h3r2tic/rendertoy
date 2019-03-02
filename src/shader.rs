@@ -222,6 +222,7 @@ struct ShaderUniformPlumber {
     img_unit: i32,
     ssbo_unit: u32,
     index_count: Option<u32>,
+    index_buffer: Option<u32>,
 }
 
 impl ShaderUniformPlumber {
@@ -317,6 +318,10 @@ impl ShaderUniformPlumber {
                     let buf = ctx.get(buf_asset)?;
 
                     unsafe {
+                        if uniform.name == "mesh_index_buf" {
+                            self.index_buffer = Some(buf.buffer_id);
+                        }
+
                         let block_index = gl::GetProgramResourceIndex(
                             program_handle,
                             gl::SHADER_STORAGE_BLOCK,
@@ -534,7 +539,18 @@ pub fn raster_tex(
         gl::ClearDepth(0.0);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
-        gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
+        if let Some(index_buffer) = uniform_plumber.index_buffer {
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
+            gl::DrawElements(
+                gl::TRIANGLES,
+                index_count as i32,
+                gl::UNSIGNED_INT,
+                std::ptr::null(),
+            );
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+        } else {
+            gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
+        }
 
         gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
         gl::DeleteFramebuffers(1, &fb_handle);
