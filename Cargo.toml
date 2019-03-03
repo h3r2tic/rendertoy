@@ -18,7 +18,7 @@ serde = "1.0.80"
 serde_derive = "1.0.80"
 bincode = "1.0.1"
 glutin = "0.19.0"
-gl = "*"
+gl = { path = "lib/gl" }
 image = "0.20.1"
 relative-path = "0.4.0"
 cargo = "0.32"

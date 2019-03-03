@@ -11,6 +11,7 @@ pub struct TextureKey {
 pub struct Texture {
     pub texture_id: u32,
     pub sampler_id: u32,
+    pub bindless_handle: u64,
     pub key: TextureKey,
     _allocation: SharedTransientAllocation,
 }
@@ -19,6 +20,7 @@ pub struct Texture {
 pub struct TextureAllocation {
     texture_id: u32,
     sampler_id: u32,
+    bindless_handle: u64,
 }
 
 pub fn create_texture(key: TextureKey) -> Texture {
@@ -36,6 +38,7 @@ impl TransientResource for Texture {
         Self {
             texture_id: allocation.payload.texture_id,
             sampler_id: allocation.payload.sampler_id,
+            bindless_handle: allocation.payload.bindless_handle,
             key: desc,
             _allocation: allocation,
         }
@@ -61,9 +64,13 @@ impl TransientResource for Texture {
             gl::SamplerParameteri(sampler_id, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
             gl::SamplerParameteri(sampler_id, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
 
+            let bindless_handle = gl::GetTextureHandleARB(texture_id);
+            gl::MakeTextureHandleResidentARB(bindless_handle);
+
             TextureAllocation {
                 texture_id,
                 sampler_id,
+                bindless_handle,
             }
         }
     }

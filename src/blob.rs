@@ -11,28 +11,34 @@ pub struct Blob {
 #[snoozy]
 pub fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
     let mut buffer = Vec::new();
-
-    let mut file_path: PathBuf = (*ctx.get(get_cargo_package_dep_path(path.crate_name.clone()))?)
-        .0
-        .clone()
-        .into();
-    file_path.push("assets");
-    file_path.push(&path.asset_name);
-
-    let file_path = &file_path.to_string_lossy().to_string();
+    let file_path = path.to_path_lossy(ctx)?;
 
     println!("Loading {}\n    -> {}", path, file_path);
 
-    std::io::Read::read_to_end(&mut File::open(file_path)?, &mut buffer)?;
-    crate::backend::file::watch_file(file_path, ctx.get_invalidation_trigger());
+    std::io::Read::read_to_end(&mut File::open(&file_path)?, &mut buffer)?;
+    crate::backend::file::watch_file(&file_path, ctx.get_invalidation_trigger());
 
     Ok(Blob { contents: buffer })
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, Abomonation)]
 pub struct AssetPath {
     pub crate_name: String,
     pub asset_name: String,
+}
+
+impl AssetPath {
+    pub fn to_path_lossy(&self, ctx: &mut Context) -> Result<String> {
+        let mut file_path: PathBuf = (*ctx
+            .get(get_cargo_package_dep_path(self.crate_name.clone()))?)
+        .0
+        .clone()
+        .into();
+        file_path.push("assets");
+        file_path.push(&self.asset_name);
+
+        Ok(file_path.to_string_lossy().to_string())
+    }
 }
 
 impl std::fmt::Display for AssetPath {

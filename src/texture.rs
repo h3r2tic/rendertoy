@@ -5,13 +5,13 @@ use crate::blob::{load_blob, AssetPath};
 
 use snoozy::*;
 
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Debug, PartialEq, Eq, Abomonation, Clone, Copy)]
 pub enum TexGamma {
     Linear,
     Srgb,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, Abomonation)]
 pub struct TexParams {
     pub gamma: TexGamma,
 }
@@ -97,4 +97,28 @@ pub fn load_tex_with_params(
         ),
         _ => Err(format_err!("Unsupported image format")),
     }
+}
+
+#[snoozy]
+pub fn make_placeholder_rgba8_tex(_ctx: &mut Context, texel_value: &[u8; 4]) -> Result<Texture> {
+    let res = backend::texture::create_texture(TextureKey {
+        width: 1,
+        height: 1,
+        format: gl::RGBA8,
+    });
+    unsafe {
+        gl::BindTexture(gl::TEXTURE_2D, res.texture_id);
+        gl::TexSubImage2D(
+            gl::TEXTURE_2D,
+            0,
+            0,
+            0,
+            1,
+            1,
+            gl::RGBA,
+            gl::UNSIGNED_BYTE,
+            std::mem::transmute(texel_value.as_ptr()),
+        );
+    }
+    Ok(res)
 }

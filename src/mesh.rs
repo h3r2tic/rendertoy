@@ -1,10 +1,26 @@
 use super::*;
 
+#[derive(Clone, Abomonation)]
+pub enum MeshMaterialMap {
+    Asset { path: AssetPath, params: TexParams },
+    Placeholder([u8; 4]),
+}
+
+#[derive(Clone, Abomonation)]
+pub struct MeshMaterial {
+    maps: [u32; 2],
+}
+
 #[derive(Abomonation, Default)]
 pub struct TriangleMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub tangents: Vec<[f32; 4]>,
+    pub material_ids: Vec<u32>, // per index, but can be flat shaded
     pub indices: Vec<u32>,
+    pub materials: Vec<MeshMaterial>, // global
+    pub maps: Vec<MeshMaterialMap>,   // global
 }
 
 fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Matrix4)>(
@@ -21,9 +37,53 @@ fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Matrix4)>(
     }
 }
 
+fn get_gltf_texture_source(tex: gltf::texture::Texture) -> Option<String> {
+    match tex.source().source() {
+        gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
+        _ => None,
+    }
+}
+
+fn load_gltf_material(
+    mat: &gltf::material::Material,
+    parent_path: &AssetPath,
+) -> (Vec<MeshMaterialMap>, MeshMaterial) {
+    let make_asset_path = |path: String| -> AssetPath {
+        let mut asset_name: std::path::PathBuf = parent_path.asset_name.clone().into();
+        asset_name.pop();
+        asset_name.push(&path);
+        AssetPath {
+            crate_name: parent_path.crate_name.clone(),
+            asset_name: asset_name.to_string_lossy().to_string(),
+        }
+    };
+
+    let make_material_map = |path: String| -> MeshMaterialMap {
+        MeshMaterialMap::Asset {
+            path: make_asset_path(path),
+            params: TexParams {
+                gamma: TexGamma::Linear,
+            },
+        }
+    };
+
+    let normal_map = mat
+        .normal_texture()
+        .and_then(|tex| get_gltf_texture_source(tex.texture()).map(make_material_map))
+        .unwrap_or(MeshMaterialMap::Placeholder([127, 127, 255, 255]));
+
+    let spec_map = mat
+        .pbr_metallic_roughness()
+        .metallic_roughness_texture()
+        .and_then(|tex| get_gltf_texture_source(tex.texture()).map(make_material_map))
+        .unwrap_or(MeshMaterialMap::Placeholder([127, 127, 0, 255]));
+
+    (vec![normal_map, spec_map], MeshMaterial { maps: [0, 1] })
+}
+
 #[snoozy]
-pub fn load_gltf_scene(_ctx: &mut Context, path: &String, scale: &f32) -> Result<TriangleMesh> {
-    let (gltf, buffers, _images) = gltf::import(path)?;
+pub fn load_gltf_scene(ctx: &mut Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
+    let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx)?)?;
 
     if let Some(scene) = gltf.default_scene() {
         let mut res: TriangleMesh = TriangleMesh::default();
@@ -33,17 +93,53 @@ pub fn load_gltf_scene(_ctx: &mut Context, path: &String, scale: &f32) -> Result
                 for prim in mesh.primitives() {
                     let reader = prim.reader(|buffer| Some(&buffers[buffer.index()]));
 
+                    let res_material_index = res.materials.len() as u32;
+
+                    {
+                        let (mut maps, mut material) = load_gltf_material(&prim.material(), path);
+
+                        let map_base = res.maps.len() as u32;
+                        for id in material.maps.iter_mut() {
+                            *id += map_base;
+                        }
+
+                        res.materials.push(material);
+                        res.maps.append(&mut maps);
+                    }
+
+                    // Collect positions (required)
                     let positions = if let Some(iter) = reader.read_positions() {
                         iter.collect::<Vec<_>>()
                     } else {
                         return;
                     };
 
+                    // Collect normals (required)
                     let normals = if let Some(iter) = reader.read_normals() {
                         iter.collect::<Vec<_>>()
                     } else {
                         return;
                     };
+
+                    // Collect tangents (optional)
+                    let mut tangents = if let Some(iter) = reader.read_tangents() {
+                        iter.collect::<Vec<_>>()
+                    } else {
+                        vec![[1.0, 0.0, 0.0, 0.0]; positions.len()]
+                    };
+
+                    // Collect uvs (optional)
+                    let mut uvs = if let Some(iter) = reader.read_tex_coords(0) {
+                        iter.into_f32().collect::<Vec<_>>()
+                    } else {
+                        vec![[0.0, 0.0]; positions.len()]
+                    };
+
+                    // Collect material ids
+                    let mut material_ids = vec![res_material_index; positions.len()];
+
+                    // --------------------------------------------------------
+                    // Write it all to the output
 
                     {
                         let mut indices: Vec<u32>;
@@ -56,6 +152,8 @@ pub fn load_gltf_scene(_ctx: &mut Context, path: &String, scale: &f32) -> Result
                         }
 
                         res.indices.append(&mut indices);
+                        res.tangents.append(&mut tangents);
+                        res.material_ids.append(&mut material_ids);
                     }
 
                     for p in positions {
@@ -72,6 +170,8 @@ pub fn load_gltf_scene(_ctx: &mut Context, path: &String, scale: &f32) -> Result
                                 .normalize();
                         res.normals.push([norm.x, norm.y, norm.z]);
                     }
+
+                    res.uvs.append(&mut uvs);
                 }
             }
         };
@@ -105,7 +205,12 @@ fn pack_unit_direction_11_10_11(x: f32, y: f32, z: f32) -> u32 {
 #[derive(Clone, Abomonation)]
 pub struct RasterGpuMesh {
     verts: Vec<RasterGpuVertex>,
+    uvs: Vec<[f32; 2]>,
+    tangents: Vec<[f32; 4]>,
     indices: Vec<u32>,
+    material_ids: Vec<u32>,
+    materials: Vec<MeshMaterial>,
+    maps: Vec<MeshMaterialMap>,
 }
 
 #[snoozy]
@@ -128,8 +233,34 @@ pub fn make_raster_mesh(
 
     Ok(RasterGpuMesh {
         verts,
+        uvs: mesh.uvs.clone(),
+        tangents: mesh.tangents.clone(),
         indices: mesh.indices.clone(),
+        material_ids: mesh.material_ids.clone(),
+        materials: mesh.materials.clone(),
+        maps: mesh.maps.clone(),
     })
+}
+
+#[derive(Copy, Clone, Abomonation, Default, Serialize)]
+struct GpuMaterial {
+    maps: [u64; 2],
+}
+
+fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
+    let tex = match *map {
+        MeshMaterialMap::Asset {
+            ref path,
+            ref params,
+        } => load_tex_with_params(path.clone(), params.clone()),
+        MeshMaterialMap::Placeholder(ref texel_value) => make_placeholder_rgba8_tex(*texel_value),
+    };
+
+    if let Ok(tex) = ctx.get(tex) {
+        tex.bindless_handle
+    } else {
+        0u64
+    }
 }
 
 #[snoozy]
@@ -140,11 +271,30 @@ pub fn upload_raster_mesh(
     let mesh = ctx.get(mesh)?;
 
     let verts = ArcView::new(&mesh, |m| &m.verts);
+    let uvs = ArcView::new(&mesh, |m| &m.uvs);
+    let tangents = ArcView::new(&mesh, |m| &m.tangents);
     let indices = ArcView::new(&mesh, |m| &m.indices);
+    let material_ids = ArcView::new(&mesh, |m| &m.material_ids);
+
+    let materials = mesh
+        .materials
+        .iter()
+        .map(|m| {
+            let mut res = GpuMaterial::default();
+            for (i, map_id) in m.maps.iter().enumerate() {
+                res.maps[i] = upload_material_map(ctx, &mesh.maps[*map_id as usize]);
+            }
+            res
+        })
+        .collect::<Vec<_>>();
 
     Ok(shader_uniforms!(
         "mesh_vertex_buf": upload_array_buffer(verts),
+        "mesh_uv_buf": upload_array_buffer(uvs),
+        "mesh_tangent_buf": upload_array_buffer(tangents),
         "mesh_index_count": indices.len() as u32,
         "mesh_index_buf": upload_array_buffer(indices),
+        "mesh_material_id_buf": upload_array_buffer(material_ids),
+        "mesh_materials_buf": upload_array_buffer(Box::new(materials)),
     ))
 }
