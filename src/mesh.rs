@@ -8,7 +8,8 @@ pub enum MeshMaterialMap {
 
 #[derive(Clone, Abomonation)]
 pub struct MeshMaterial {
-    maps: [u32; 2],
+    pub maps: [u32; 2],
+    pub emissive: [f32; 3],
 }
 
 #[derive(Abomonation, Default)]
@@ -78,7 +79,19 @@ fn load_gltf_material(
         .and_then(|tex| get_gltf_texture_source(tex.texture()).map(make_material_map))
         .unwrap_or(MeshMaterialMap::Placeholder([127, 127, 0, 255]));
 
-    (vec![normal_map, spec_map], MeshMaterial { maps: [0, 1] })
+    let emissive = if mat.emissive_texture().is_some() {
+        [0.0, 0.0, 0.0]
+    } else {
+        mat.emissive_factor()
+    };
+
+    (
+        vec![normal_map, spec_map],
+        MeshMaterial {
+            maps: [0, 1],
+            emissive,
+        },
+    )
 }
 
 #[snoozy]

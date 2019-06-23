@@ -32,7 +32,7 @@ pub fn draw_fullscreen_texture(tex: u32, framebuffer_size: (u32, u32)) {
 					void main()
 					{
 						ivec2 texSize = textureSize(Texture, 0);
-						Out_Color = textureLod(Texture, Frag_UV * (vec2(texSize - 1) / vec2(texSize)) + vec2(0.5, 0.5) / texSize, 0);
+						Out_Color = textureLod(Texture, Frag_UV, 0);
 					}"#
                     .to_string(),
                 }],
