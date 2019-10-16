@@ -80,12 +80,7 @@ extern "system" fn gl_debug_message(
             _ => false,
         };
 
-        let is_important_severity = match severity {
-            gl::DEBUG_SEVERITY_MEDIUM | gl::DEBUG_SEVERITY_HIGH => true,
-            _ => false,
-        };
-
-        if !is_important_type || !is_important_severity || is_ignored_id {
+        if !is_important_type || is_ignored_id {
             println!("GL debug: {}\n", s.to_string_lossy());
         } else {
             panic!(
@@ -199,14 +194,30 @@ impl Rendertoy {
 
         unsafe {
             gl::DebugMessageCallback(gl_debug_message, std::ptr::null_mut());
+
+            // Disable everything by default
             gl::DebugMessageControl(
                 gl::DONT_CARE,
                 gl::DONT_CARE,
                 gl::DONT_CARE,
                 0,
                 std::ptr::null_mut(),
-                1,
+                0,
             );
+
+            let severity_list = [gl::DEBUG_SEVERITY_MEDIUM | gl::DEBUG_SEVERITY_HIGH];
+
+            for severity in &severity_list {
+                gl::DebugMessageControl(
+                    gl::DONT_CARE,
+                    gl::DONT_CARE,
+                    *severity,
+                    0,
+                    std::ptr::null_mut(),
+                    1,
+                );
+            }
+
             gl::DebugMessageControl(
                 gl::DEBUG_SOURCE_SHADER_COMPILER,
                 gl::DONT_CARE,
