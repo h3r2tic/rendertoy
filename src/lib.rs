@@ -72,13 +72,29 @@ extern "system" fn gl_debug_message(
 
         let is_ignored_id = id == 131216; // Program/shader state info: GLSL shader * failed to compile. WAT.
 
-        if gl::DEBUG_TYPE_PERFORMANCE == type_
-            || gl::DEBUG_SEVERITY_NOTIFICATION == severity
-            || is_ignored_id
-        {
+        let is_important_type = match type_ {
+            gl::DEBUG_TYPE_ERROR
+            | gl::DEBUG_TYPE_UNDEFINED_BEHAVIOR
+            | gl::DEBUG_TYPE_DEPRECATED_BEHAVIOR
+            | gl::DEBUG_TYPE_PORTABILITY => true,
+            _ => false,
+        };
+
+        let is_important_severity = match severity {
+            gl::DEBUG_SEVERITY_MEDIUM | gl::DEBUG_SEVERITY_HIGH => true,
+            _ => false,
+        };
+
+        if !is_important_type || !is_important_severity || is_ignored_id {
             println!("GL debug: {}\n", s.to_string_lossy());
         } else {
-            panic!("OpenGL Debug message ({}): {}", id, s.to_string_lossy());
+            panic!(
+                "OpenGL Debug message ({}, {:x}, {:x}): {}",
+                id,
+                type_,
+                severity,
+                s.to_string_lossy()
+            );
         }
     }
 }
