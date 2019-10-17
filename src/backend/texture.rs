@@ -7,6 +7,44 @@ pub struct TextureKey {
     pub format: u32,
 }
 
+impl TextureKey {
+    pub fn res_div_round_up(&self, x: u32, y: u32) -> Self {
+        let mut res = self.clone();
+        res.width = (res.width + x - 1) / x;
+        res.height = (res.height + y - 1) / y;
+        res
+    }
+
+    pub fn padded(&self, x: u32, y: u32) -> Self {
+        let mut res = self.clone();
+        res.width += x;
+        res.height += y;
+        res
+    }
+
+    pub fn half_res(&self) -> Self {
+        self.res_div_round_up(2, 2)
+    }
+
+    pub fn with_width(&self, v: u32) -> Self {
+        let mut res = self.clone();
+        res.width = v;
+        res
+    }
+
+    pub fn with_height(&self, v: u32) -> Self {
+        let mut res = self.clone();
+        res.height = v;
+        res
+    }
+
+    pub fn with_format(&self, format: u32) -> Self {
+        let mut res = self.clone();
+        res.format = format;
+        res
+    }
+}
+
 #[derive(Clone)]
 pub struct Texture {
     pub texture_id: u32,

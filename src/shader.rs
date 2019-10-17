@@ -276,6 +276,24 @@ impl ShaderUniformPlumber {
                 ShaderUniformValue::TextureAsset(ref tex_asset) => {
                     let tex = ctx.get(tex_asset)?;
 
+                    let size_loc = unsafe {
+                        let size_name = uniform.name.clone() + "_size";
+                        let c_name = std::ffi::CString::new(size_name).unwrap();
+                        gl::GetUniformLocation(program_handle, c_name.as_ptr())
+                    };
+
+                    if size_loc != -1 {
+                        unsafe {
+                            gl::Uniform4f(
+                                size_loc,
+                                tex.key.width as f32,
+                                tex.key.height as f32,
+                                1.0 / tex.key.width as f32,
+                                1.0 / tex.key.height as f32,
+                            );
+                        }
+                    }
+
                     unsafe {
                         if loc != -1 {
                             let mut type_gl = 0;
