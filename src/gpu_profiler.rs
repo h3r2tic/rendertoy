@@ -8,7 +8,8 @@ pub fn profile<F: FnOnce()>(name: &str, f: F) {
 }
 
 pub fn end_frame() {
-    GPU_PROFILER.lock().unwrap().try_finish_queries();
+    let mut prof = GPU_PROFILER.lock().unwrap();
+    prof.try_finish_queries();
 }
 
 pub fn with_stats<F: FnOnce(&GpuProfilerStats)>(f: F) {
@@ -33,6 +34,7 @@ impl GpuProfilerScope {
 #[derive(Default, Debug)]
 pub struct GpuProfilerStats {
     pub scopes: HashMap<String, GpuProfilerScope>,
+    pub order: Vec<String>,
 }
 
 struct ActiveQuery {
@@ -71,6 +73,7 @@ impl GpuProfilerStats {
 struct GpuProfiler {
     active_queries: Vec<ActiveQuery>,
     inactive_queries: Vec<u32>,
+    frame_query_names: Vec<String>,
     stats: GpuProfilerStats,
 }
 
@@ -79,6 +82,7 @@ impl GpuProfiler {
         Self {
             active_queries: Vec::new(),
             inactive_queries: Vec::new(),
+            frame_query_names: Vec::new(),
             stats: Default::default(),
         }
     }
@@ -109,6 +113,9 @@ impl GpuProfiler {
             })
             .collect();
 
+        self.stats.order.clear();
+        self.stats.order.extend(self.frame_query_names.drain(..));
+
         // Remove the finished queries from the active list
         for (i, _) in finished_queries.iter().rev() {
             self.inactive_queries.push(self.active_queries[*i].handle);
@@ -121,6 +128,8 @@ impl GpuProfiler {
     }
 
     fn profile<F: FnOnce()>(&mut self, name: &str, f: F) {
+        self.frame_query_names.push(name.to_string());
+
         let handle = self.new_query_handle();
         unsafe {
             gl::BeginQuery(gl::TIME_ELAPSED, handle);

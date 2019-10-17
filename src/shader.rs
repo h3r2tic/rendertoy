@@ -1,6 +1,7 @@
 use crate::backend::{self, render_buffer::*};
 use crate::blob::*;
 use crate::buffer::Buffer;
+use crate::gpu_debugger;
 use crate::gpu_profiler;
 use crate::texture::{Texture, TextureKey};
 use relative_path::{RelativePath, RelativePathBuf};
@@ -470,6 +471,8 @@ pub fn compute_tex(
             gl::BindTexture(gl::TEXTURE_2D, 0);
         }
     }
+
+    gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
 
     Ok(output_tex)
 }

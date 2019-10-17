@@ -5,6 +5,7 @@ mod blob;
 mod buffer;
 mod camera;
 mod consts;
+mod gpu_debugger;
 mod gpu_profiler;
 mod keyboard;
 mod mesh;
@@ -105,6 +106,7 @@ pub struct Rendertoy {
     cfg: RendertoyConfig,
     keyboard: KeyboardState,
     gl_state: GlState,
+    selected_debug_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -240,6 +242,7 @@ impl Rendertoy {
             cfg,
             keyboard: KeyboardState::new(),
             gl_state: GlState { vao },
+            selected_debug_name: None,
         }
     }
 
@@ -351,11 +354,25 @@ impl Rendertoy {
         let tex = callback(&state);
 
         with_snapshot(|snapshot| {
-            draw_fullscreen_texture(&*snapshot.get(tex), state.window_size_pixels);
+            let final_texture = &*snapshot.get(tex);
+
+            let mut debugged_texture: Option<u32> = None;
+            gpu_debugger::with_textures(|data| {
+                debugged_texture = self
+                    .selected_debug_name
+                    .as_ref()
+                    .and_then(|name| data.textures.get(name).cloned());
+            });
+
+            //draw_fullscreen_texture(final_texture, state.window_size_pixels);
+            backend::draw::draw_fullscreen_texture(
+                debugged_texture.unwrap_or(final_texture.texture_id),
+                state.window_size_pixels,
+            );
         });
     }
 
-    fn draw_profiling_stats(&self, vg_context: &nanovg::Context, font: &Font) {
+    fn draw_profiling_stats(&self, vg_context: &nanovg::Context, font: &Font) -> Option<String> {
         let size = self
             .gl_window
             .get_inner_size()
@@ -370,18 +387,20 @@ impl Rendertoy {
 
         let (width, height) = (width as f32, height as f32);
 
+        let mut selected_name = None;
+
         vg_context.frame(
             (width, height),
             self.gl_window.get_hidpi_factor() as f32,
             |frame| {
-                let transform = Transform::new();
-                let text_options = TextOptions {
+                let mut text_options = TextOptions {
                     size: 24.0,
                     color: Color::from_rgb(255, 255, 255),
                     align: Alignment::new().bottom().left(),
-                    transform: Some(transform),
+                    transform: None,
                     ..Default::default()
                 };
+
                 let mut text_shadow_options = text_options.clone();
                 text_shadow_options.color = Color::from_rgb(0, 0, 0);
                 text_shadow_options.blur = 1.0;
@@ -391,16 +410,60 @@ impl Rendertoy {
                 let mut y = 10.0 + metrics.line_height;
 
                 gpu_profiler::with_stats(|stats| {
-                    for (name, scope) in stats.scopes.iter() {
+                    /*for (name, scope) in stats.scopes.iter() {
                         let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
+                        let (uw, _) = frame.text_bounds(*font, (0.0, 0.0), &text, text_options);
+
+                        // self.mouse_state.pos.y
+                        let hit = self.mouse_state.pos.y >= (y - metrics.line_height)
+                            && self.mouse_state.pos.y < y
+                            && self.mouse_state.pos.x < uw + 10.0;
+                        if hit {
+                            selected_name = Some(name.to_owned());
+                        }
+
+                        let color = if hit {
+                            Color::from_rgb(255, 64, 16)
+                        } else {
+                            Color::from_rgb(255, 255, 255)
+                        };
+                        text_options.color = color;
 
                         frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
                         frame.text(*font, (10.0, y), &text, text_options);
                         y += metrics.line_height;
+                    }*/
+
+                    for name in stats.order.iter() {
+                        if let Some(scope) = stats.scopes.get(name) {
+                            let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
+                            let (uw, _) = frame.text_bounds(*font, (0.0, 0.0), &text, text_options);
+
+                            // self.mouse_state.pos.y
+                            let hit = self.mouse_state.pos.y >= (y - metrics.line_height)
+                                && self.mouse_state.pos.y < y
+                                && self.mouse_state.pos.x < uw + 10.0;
+                            if hit {
+                                selected_name = Some(name.to_owned());
+                            }
+
+                            let color = if hit {
+                                Color::from_rgb(255, 64, 16)
+                            } else {
+                                Color::from_rgb(255, 255, 255)
+                            };
+                            text_options.color = color;
+
+                            frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
+                            frame.text(*font, (10.0, y), &text, text_options);
+                            y += metrics.line_height;
+                        }
                     }
                 });
             },
         );
+
+        selected_name
     }
 
     pub fn draw_forever<F>(&mut self, mut callback: F)
@@ -436,8 +499,9 @@ impl Rendertoy {
 
             self.draw_with_frame_snapshot(&mut callback);
             gpu_profiler::end_frame();
+            gpu_debugger::end_frame();
 
-            self.draw_profiling_stats(&vg_context, &font);
+            self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
 
             running = self.next_frame();
         }
