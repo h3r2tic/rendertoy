@@ -10,7 +10,7 @@ pub struct CameraMatrices {
 pub trait Camera {
     type InputType;
 
-    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType, time: f32);
+    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType);
     fn calc_matrices(&self) -> CameraMatrices;
 }
 
@@ -43,6 +43,7 @@ pub struct FirstPersonCameraInput {
     move_vec: Vector3,
     yaw_delta: f32,
     pitch_delta: f32,
+    dt: f32,
 }
 
 /*fn highp_invert_matrix(m: &Matrix4) -> Option<Matrix4> {
@@ -79,6 +80,7 @@ impl<'a> From<&FrameState<'a>> for FirstPersonCameraInput {
             move_vec,
             yaw_delta,
             pitch_delta,
+            dt: frame_state.dt,
         }
     }
 }
@@ -134,15 +136,18 @@ impl FirstPersonCamera {
 impl Camera for FirstPersonCamera {
     type InputType = FirstPersonCameraInput;
 
-    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType, time: f32) {
+    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType) {
         let input = input.into();
-        self.translate(&input.move_vec);
+
+        let move_dist = input.dt * 60.0;
+        self.translate(&(input.move_vec * move_dist));
+
         self.rotate_pitch(input.pitch_delta);
         self.rotate_yaw(input.yaw_delta);
 
         let target_quat = self.calc_rotation_quat();
-        let rot_interp = 1.0 - (-time * 30.0 / self.look_smoothness.max(1e-5)).exp();
-        let pos_interp = 1.0 - (-time * 16.0 / self.move_smoothness.max(1e-5)).exp();
+        let rot_interp = 1.0 - (-input.dt * 30.0 / self.look_smoothness.max(1e-5)).exp();
+        let pos_interp = 1.0 - (-input.dt * 16.0 / self.move_smoothness.max(1e-5)).exp();
         self.interp_rot = self.interp_rot.slerp(&target_quat, rot_interp);
         self.interp_rot.renormalize();
         self.interp_pos = self
@@ -224,8 +229,8 @@ impl<CameraType: Camera> CameraConvergenceEnforcer<CameraType> {
 impl<CameraType: Camera> Camera for CameraConvergenceEnforcer<CameraType> {
     type InputType = CameraType::InputType;
 
-    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType, time: f32) {
-        self.camera.update(input, time);
+    fn update<InputType: Into<Self::InputType>>(&mut self, input: InputType) {
+        self.camera.update(input);
 
         let new_matrices = self.camera.calc_matrices();
         let view_to_clip: na::Matrix4<f64> = na::convert(new_matrices.view_to_clip);

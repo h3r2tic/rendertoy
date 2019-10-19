@@ -56,7 +56,7 @@ extern crate abomonation_derive;
 use clap::ArgMatches;
 use glutin::dpi::*;
 use glutin::GlContext;
-use nanovg::{Alignment, Color, Font, TextOptions, Transform};
+use nanovg::{Alignment, Color, Font, TextOptions};
 use std::str::FromStr;
 
 extern "system" fn gl_debug_message(
@@ -107,6 +107,7 @@ pub struct Rendertoy {
     keyboard: KeyboardState,
     gl_state: GlState,
     selected_debug_name: Option<String>,
+    last_frame_instant: std::time::Instant,
 }
 
 #[derive(Clone)]
@@ -138,12 +139,14 @@ pub struct FrameState<'a> {
     pub mouse: &'a MouseState,
     pub keys: &'a KeyboardState,
     pub window_size_pixels: (u32, u32),
+    pub dt: f32,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct RendertoyConfig {
     pub width: u32,
     pub height: u32,
+    pub vsync: bool,
 }
 
 fn parse_resolution(s: &str) -> Result<(u32, u32)> {
@@ -168,7 +171,18 @@ impl RendertoyConfig {
             .map(|val| parse_resolution(val).unwrap())
             .unwrap_or((1280, 720));
 
-        RendertoyConfig { width, height }
+        let vsync = matches
+            .value_of("vsync")
+            .map(|val| {
+                FromStr::from_str(val).expect("Could not parse the value of 'vsync' as bool")
+            })
+            .unwrap_or(true);
+
+        RendertoyConfig {
+            width,
+            height,
+            vsync,
+        }
     }
 }
 
@@ -179,7 +193,7 @@ impl Rendertoy {
             .with_title("Hello, rusty world!")
             .with_dimensions(LogicalSize::new(cfg.width as f64, cfg.height as f64));
         let context = glutin::ContextBuilder::new()
-            .with_vsync(true)
+            .with_vsync(cfg.vsync)
             .with_gl_debug_flag(true)
             .with_gl_profile(glutin::GlProfile::Compatibility) // nanovg doesn't work with Core.
             //.with_gl_profile(glutin::GlProfile::Core)
@@ -195,7 +209,7 @@ impl Rendertoy {
         let mut vao: u32 = 0;
 
         unsafe {
-            gl::DebugMessageCallback(gl_debug_message, std::ptr::null_mut());
+            gl::DebugMessageCallback(Some(gl_debug_message), std::ptr::null_mut());
 
             // Disable everything by default
             gl::DebugMessageControl(
@@ -243,6 +257,7 @@ impl Rendertoy {
             keyboard: KeyboardState::new(),
             gl_state: GlState { vao },
             selected_debug_name: None,
+            last_frame_instant: std::time::Instant::now(),
         }
     }
 
@@ -254,6 +269,12 @@ impl Rendertoy {
                 clap::Arg::with_name("resolution")
                     .long("resolution")
                     .help("Window resolution")
+                    .takes_value(true),
+            )
+            .arg(
+                clap::Arg::with_name("vsync")
+                    .long("vsync")
+                    .help("Wait for V-Sync")
                     .takes_value(true),
             )
             .get_matches();
@@ -345,10 +366,15 @@ impl Rendertoy {
             .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
         let window_size_pixels = (size.width as u32, size.height as u32);
 
+        let now = std::time::Instant::now();
+        let dt = now - self.last_frame_instant;
+        self.last_frame_instant = now;
+
         let state = FrameState {
             mouse: &self.mouse_state,
             keys: &self.keyboard,
             window_size_pixels,
+            dt: dt.as_secs_f32(),
         };
 
         let tex = callback(&state);
@@ -436,7 +462,8 @@ impl Rendertoy {
 
                     for name in stats.order.iter() {
                         if let Some(scope) = stats.scopes.get(name) {
-                            let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
+                            let text =
+                                format!("{}: {:.3}ms", name, scope.average_duration_millis());
                             let (uw, _) = frame.text_bounds(*font, (0.0, 0.0), &text, text_options);
 
                             // self.mouse_state.pos.y

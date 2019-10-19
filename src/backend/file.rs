@@ -9,7 +9,7 @@ use std::time::Duration;
 
 struct FileWatcher {
     watcher: RecommendedWatcher,
-    callbacks: HashMap<PathBuf, Box<Fn() + Sync + Send>>,
+    callbacks: HashMap<PathBuf, Box<dyn Fn() + Sync + Send>>,
 }
 
 impl FileWatcher {

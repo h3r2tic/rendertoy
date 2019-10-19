@@ -7,4 +7,4 @@ edition = "2018"
 [dependencies]
 
 [build-dependencies]
-gl_generator = "0.10.0"
+gl_generator = "0.14.0"

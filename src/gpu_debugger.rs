@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::default::Default;
-use std::mem::replace;
 use std::sync::Mutex;
 
 pub fn report_texture(name: &str, texture_handle: u32) {
