@@ -538,3 +538,13 @@ impl Rendertoy {
 pub fn draw_fullscreen_texture(tex: &Texture, framebuffer_size: (u32, u32)) {
     backend::draw::draw_fullscreen_texture(tex.texture_id, framebuffer_size);
 }
+
+impl TextureKey {
+    pub fn fullscreen(rtoy: &Rendertoy, format: u32) -> Self {
+        TextureKey {
+            width: rtoy.width(),
+            height: rtoy.height(),
+            format,
+        }
+    }
+}
