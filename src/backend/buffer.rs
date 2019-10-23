@@ -8,6 +8,8 @@ pub struct BufferKey {
 #[derive(Clone)]
 pub struct BufferAllocation {
     buffer_id: u32,
+    texture_id: u32,
+    bindless_texture_handle: u64,
 }
 
 #[derive(Clone)]
@@ -45,7 +47,20 @@ impl TransientResource for Buffer {
                 gl::DYNAMIC_STORAGE_BIT,
             );
 
-            BufferAllocation { buffer_id }
+            let mut texture_id = 0;
+            gl::GenTextures(1, &mut texture_id);
+            gl::BindTexture(gl::TEXTURE_BUFFER, texture_id);
+            gl::TexBuffer(gl::TEXTURE_BUFFER, gl::R32UI, buffer_id);
+            gl::BindTexture(gl::TEXTURE_BUFFER, 0);
+
+            let bindless_texture_handle = gl::GetTextureHandleARB(texture_id);
+            gl::MakeTextureHandleResidentARB(bindless_texture_handle);
+
+            BufferAllocation {
+                buffer_id,
+                texture_id,
+                bindless_texture_handle,
+            }
         }
     }
 }
