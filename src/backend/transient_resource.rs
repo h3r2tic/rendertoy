@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use typemap::{ShareMap, TypeMap};
 
 pub trait TransientResource: Clone {
-    type Desc: TransientResourceDesc;
+    type Desc: TransientResourceDesc + std::fmt::Debug;
     type Allocation: TransientResourceAllocPayload;
 
     fn new(
@@ -36,7 +36,7 @@ pub trait TransientAllocation: Send + Sync + Drop {}
 
 impl<Desc, AllocPayload> TransientAllocation for TransientResourceAllocation<Desc, AllocPayload>
 where
-    Desc: TransientResourceDesc,
+    Desc: TransientResourceDesc + std::fmt::Debug,
     AllocPayload: TransientResourceAllocPayload,
 {
 }
@@ -47,15 +47,15 @@ pub type SharedTransientAllocation = std::sync::Arc<dyn TransientAllocation>;
 // --------------------------------------------------------
 
 // Key via which resources are matched for reuse.
-#[derive(Clone)]
-pub struct TransientResourceKey<Desc: TransientResourceDesc>(pub Desc);
+#[derive(Clone, Debug)]
+pub struct TransientResourceKey<Desc: TransientResourceDesc + std::fmt::Debug>(pub Desc);
 
 // A live allocation of a resouce which can be shared over multiple handles,
 // or wait in a pool for later use.
 #[derive(Clone)]
 pub struct TransientResourceAllocation<Desc, AllocPayload>
 where
-    Desc: TransientResourceDesc,
+    Desc: TransientResourceDesc + std::fmt::Debug,
     AllocPayload: TransientResourceAllocPayload,
 {
     pub key: TransientResourceKey<Desc>,
@@ -69,7 +69,7 @@ struct Key<Desc, P>(PhantomData<fn(Desc, P)>);
 
 impl<Desc, P> typemap::Key for Key<Desc, P>
 where
-    Desc: TransientResourceDesc,
+    Desc: TransientResourceDesc + std::fmt::Debug,
     P: TransientResourceAllocPayload,
 {
     type Value = HashMap<Desc, Vec<TransientResourceAllocation<Desc, P>>>;
@@ -88,11 +88,13 @@ pub fn create_transient<Res: TransientResource>(desc: Res::Desc) -> Res {
     let existing = res_cache.entry(desc).or_default();
 
     let alloc = if existing.is_empty() {
+        println!("allocating new resource: {:?}", desc);
         TransientResourceAllocation {
             key: TransientResourceKey(desc),
             payload: Res::allocate_payload(desc),
         }
     } else {
+        //println!("reusing resource from cache");
         existing.pop().unwrap()
     };
 
@@ -101,10 +103,11 @@ pub fn create_transient<Res: TransientResource>(desc: Res::Desc) -> Res {
 
 impl<Desc, P> Drop for TransientResourceAllocation<Desc, P>
 where
-    Desc: TransientResourceDesc,
+    Desc: TransientResourceDesc + std::fmt::Debug,
     P: TransientResourceAllocPayload,
 {
     fn drop(&mut self) {
+        //println!("putting resource into cache");
         let mut res_cache_lock = TRANSIENT_RESOURCE_CACHE.lock().unwrap();
         let res_cache = res_cache_lock
             .entry::<Key<Desc, P>>()

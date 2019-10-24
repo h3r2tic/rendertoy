@@ -18,10 +18,19 @@ pub fn with_stats<F: FnOnce(&GpuProfilerStats)>(f: F) {
 
 // TODO: currently merges multiple invocations in a frame into a single bucket, and averages it
 // should instead report the count per frame along with correct per-hit timing
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GpuProfilerScope {
-    pub hits: [u64; 16], // nanoseconds
+    pub hits: Vec<u64>, // nanoseconds
     pub write_head: u32,
+}
+
+impl Default for GpuProfilerScope {
+    fn default() -> GpuProfilerScope {
+        GpuProfilerScope {
+            hits: vec![0u64; 64],
+            write_head: 0,
+        }
+    }
 }
 
 impl GpuProfilerScope {
@@ -65,7 +74,8 @@ impl ActiveQuery {
 impl GpuProfilerStats {
     fn report_duration_nanos(&mut self, name: String, duration: u64) {
         let mut entry = self.scopes.entry(name).or_default();
-        entry.hits[entry.write_head as usize % entry.hits.len()] = duration;
+        let len = entry.hits.len();
+        entry.hits[entry.write_head as usize % len] = duration;
         entry.write_head += 1;
     }
 }

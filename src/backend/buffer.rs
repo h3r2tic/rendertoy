@@ -3,20 +3,21 @@ use super::transient_resource::*;
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct BufferKey {
     pub size_bytes: usize,
+    pub texture_format: Option<u32>,
 }
 
 #[derive(Clone)]
 pub struct BufferAllocation {
     buffer_id: u32,
-    texture_id: u32,
-    bindless_texture_handle: u64,
+    texture_id: Option<u32>,
+    bindless_texture_handle: Option<u64>,
 }
 
 #[derive(Clone)]
 pub struct Buffer {
     pub buffer_id: u32,
-    pub texture_id: u32,
-    pub bindless_texture_handle: u64,
+    pub texture_id: Option<u32>,
+    pub bindless_texture_handle: Option<u64>,
     pub key: BufferKey,
     _allocation: SharedTransientAllocation,
 }
@@ -51,19 +52,23 @@ impl TransientResource for Buffer {
                 gl::DYNAMIC_STORAGE_BIT,
             );
 
-            let mut texture_id = 0;
-            gl::GenTextures(1, &mut texture_id);
-            gl::BindTexture(gl::TEXTURE_BUFFER, texture_id);
-            gl::TexBuffer(gl::TEXTURE_BUFFER, gl::R32UI, buffer_id);
-            gl::BindTexture(gl::TEXTURE_BUFFER, 0);
+            let tex = key.texture_format.map(|internal_format| {
+                let mut texture_id = 0u32;
+                gl::GenTextures(1, &mut texture_id);
+                gl::BindTexture(gl::TEXTURE_BUFFER, texture_id);
+                gl::TexBuffer(gl::TEXTURE_BUFFER, internal_format, buffer_id);
+                gl::BindTexture(gl::TEXTURE_BUFFER, 0);
 
-            let bindless_texture_handle = gl::GetTextureHandleARB(texture_id);
-            gl::MakeTextureHandleResidentARB(bindless_texture_handle);
+                let bindless_texture_handle: u64 = gl::GetTextureHandleARB(texture_id);
+                gl::MakeTextureHandleResidentARB(bindless_texture_handle);
+
+                (texture_id, bindless_texture_handle)
+            });
 
             BufferAllocation {
                 buffer_id,
-                texture_id,
-                bindless_texture_handle,
+                texture_id: tex.map(|t| t.0),
+                bindless_texture_handle: tex.map(|t| t.1),
             }
         }
     }

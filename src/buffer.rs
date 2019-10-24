@@ -11,6 +11,7 @@ pub fn upload_buffer<T: Copy + Send + 'static>(_ctx: &mut Context, contents: &T)
 
     let res = backend::buffer::create_buffer(BufferKey {
         size_bytes: size_of_t,
+        texture_format: None,
     });
 
     unsafe {
@@ -75,18 +76,19 @@ impl<T: 'static, OwnerT> std::hash::Hash for ArcView<T, OwnerT> {
     }
 }
 
-#[snoozy]
-pub fn upload_array_buffer<
+pub fn upload_array_buffer_impl<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
     _ctx: &mut Context,
     contents: &C,
+    texture_format: Option<u32>,
 ) -> Result<Buffer> {
     let size_of_t = size_of::<T>();
 
     let res = backend::buffer::create_buffer(BufferKey {
         size_bytes: contents.len() * size_of_t,
+        texture_format,
     });
 
     unsafe {
@@ -101,6 +103,29 @@ pub fn upload_array_buffer<
     }
 
     Ok(res)
+}
+
+#[snoozy]
+pub fn upload_array_buffer<
+    T: Sized + 'static,
+    C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
+>(
+    ctx: &mut Context,
+    contents: &C,
+) -> Result<Buffer> {
+    upload_array_buffer_impl(ctx, contents, None)
+}
+
+#[snoozy]
+pub fn upload_array_tex_buffer<
+    T: Sized + 'static,
+    C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
+>(
+    ctx: &mut Context,
+    contents: &C,
+    texture_format: &u32,
+) -> Result<Buffer> {
+    upload_array_buffer_impl(ctx, contents, Some(*texture_format))
 }
 
 pub fn to_byte_vec<T>(mut v: Vec<T>) -> Vec<u8>

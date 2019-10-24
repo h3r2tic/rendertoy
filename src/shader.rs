@@ -210,7 +210,7 @@ pub fn make_raster_pipeline(
 ) -> Result<RasterPipeline> {
     let shaders: Result<Vec<u32>> = shaders
         .iter()
-        .map(|a| ctx.get(*a).map(|s| s.handle))
+        .map(|a| ctx.get(&*a).map(|s| s.handle))
         .collect();
 
     Ok(RasterPipeline {
@@ -361,7 +361,11 @@ impl ShaderUniformPlumber {
                                 || gl::INT_SAMPLER_BUFFER == type_gl
                             {
                                 gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
-                                gl::BindTexture(gl::TEXTURE_BUFFER, buf.texture_id);
+                                gl::BindTexture(
+                                    gl::TEXTURE_BUFFER,
+                                    buf.texture_id
+                                        .expect("buffer doesn't have a texture buffer"),
+                                );
                                 gl::BindSampler(self.img_unit as u32, 0);
                                 gl::Uniform1i(loc, self.img_unit);
                                 self.img_unit += 1;
