@@ -221,18 +221,14 @@ impl Rendertoy {
                 0,
             );
 
-            let severity_list = [gl::DEBUG_SEVERITY_MEDIUM | gl::DEBUG_SEVERITY_HIGH];
-
-            for severity in &severity_list {
-                gl::DebugMessageControl(
-                    gl::DONT_CARE,
-                    gl::DONT_CARE,
-                    *severity,
-                    0,
-                    std::ptr::null_mut(),
-                    1,
-                );
-            }
+            gl::DebugMessageControl(
+                gl::DONT_CARE,
+                gl::DONT_CARE,
+                gl::DONT_CARE,
+                0,
+                std::ptr::null_mut(),
+                1,
+            );
 
             gl::DebugMessageControl(
                 gl::DEBUG_SOURCE_SHADER_COMPILER,

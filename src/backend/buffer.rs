@@ -15,6 +15,8 @@ pub struct BufferAllocation {
 #[derive(Clone)]
 pub struct Buffer {
     pub buffer_id: u32,
+    pub texture_id: u32,
+    pub bindless_texture_handle: u64,
     pub key: BufferKey,
     _allocation: SharedTransientAllocation,
 }
@@ -29,6 +31,8 @@ impl TransientResource for Buffer {
     ) -> Self {
         Self {
             buffer_id: allocation.payload.buffer_id,
+            texture_id: allocation.payload.texture_id,
+            bindless_texture_handle: allocation.payload.bindless_texture_handle,
             key: desc,
             _allocation: allocation,
         }

@@ -329,6 +329,8 @@ impl ShaderUniformPlumber {
                                 gl::BindSampler(self.img_unit as u32, tex.sampler_id);
                                 gl::Uniform1i(loc, self.img_unit);
                                 self.img_unit += 1;
+                            } else {
+                                panic!("unspupported sampler type: {:x}", type_gl);
                             }
                         }
                     }
@@ -341,23 +343,53 @@ impl ShaderUniformPlumber {
                             self.index_buffer = Some(buf.buffer_id);
                         }
 
-                        let block_index = gl::GetProgramResourceIndex(
-                            program_handle,
-                            gl::SHADER_STORAGE_BLOCK,
-                            c_name.as_ptr(),
-                        );
-                        if block_index != std::u32::MAX {
-                            gl::ShaderStorageBlockBinding(
+                        if loc != -1 {
+                            let mut type_gl = 0;
+                            let mut size = 0;
+                            gl::GetActiveUniform(
                                 program_handle,
-                                block_index,
-                                self.ssbo_unit,
+                                loc as u32,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut size,
+                                &mut type_gl,
+                                std::ptr::null_mut(),
                             );
-                            gl::BindBufferBase(
-                                gl::SHADER_STORAGE_BUFFER,
-                                self.ssbo_unit,
-                                buf.buffer_id,
+
+                            if gl::SAMPLER_BUFFER == type_gl
+                                || gl::UNSIGNED_INT_SAMPLER_BUFFER == type_gl
+                                || gl::INT_SAMPLER_BUFFER == type_gl
+                            {
+                                gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
+                                gl::BindTexture(gl::TEXTURE_BUFFER, buf.texture_id);
+                                gl::BindSampler(self.img_unit as u32, 0);
+                                gl::Uniform1i(loc, self.img_unit);
+                                self.img_unit += 1;
+                            } else {
+                                panic!(
+                                    "Buffer textures can only be bound to gsamplerBuffer; got {:x}",
+                                    type_gl
+                                );
+                            }
+                        } else {
+                            let block_index = gl::GetProgramResourceIndex(
+                                program_handle,
+                                gl::SHADER_STORAGE_BLOCK,
+                                c_name.as_ptr(),
                             );
-                            self.ssbo_unit += 1;
+                            if block_index != std::u32::MAX {
+                                gl::ShaderStorageBlockBinding(
+                                    program_handle,
+                                    block_index,
+                                    self.ssbo_unit,
+                                );
+                                gl::BindBufferBase(
+                                    gl::SHADER_STORAGE_BUFFER,
+                                    self.ssbo_unit,
+                                    buf.buffer_id,
+                                );
+                                self.ssbo_unit += 1;
+                            }
                         }
                     }
                 }
