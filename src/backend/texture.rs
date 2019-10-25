@@ -84,6 +84,9 @@ impl TransientResource for Texture {
 
     fn allocate_payload(key: TextureKey) -> TextureAllocation {
         unsafe {
+            let mut prev_bound_texture = 0;
+            gl::GetIntegerv(gl::TEXTURE_BINDING_2D, &mut prev_bound_texture);
+
             let mut texture_id = 0;
             gl::GenTextures(1, &mut texture_id);
             gl::BindTexture(gl::TEXTURE_2D, texture_id);
@@ -104,6 +107,9 @@ impl TransientResource for Texture {
 
             let bindless_handle = gl::GetTextureHandleARB(texture_id);
             gl::MakeTextureHandleResidentARB(bindless_handle);
+
+            // Restore the previously bound texture
+            gl::BindTexture(gl::TEXTURE_2D, prev_bound_texture as u32);
 
             TextureAllocation {
                 texture_id,

@@ -309,6 +309,8 @@ impl ShaderUniformPlumber {
                                 std::ptr::null_mut(),
                             );
 
+                            //dbg!((&uniform.name, tex.texture_id));
+
                             if gl::IMAGE_2D == type_gl {
                                 let level = 0;
                                 let layered = gl::FALSE;
@@ -443,6 +445,8 @@ pub fn compute_tex(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
+    let output_tex = backend::texture::create_texture(*key);
+
     let mut uniform_plumber = ShaderUniformPlumber::default();
 
     let cs = ctx.get(cs)?;
@@ -457,8 +461,6 @@ pub fn compute_tex(
         uniform_plumber.plumb(ctx, cs.handle, uniforms)?;
         uniform_plumber.img_unit
     };
-
-    let output_tex = backend::texture::create_texture(*key);
 
     let dispatch_size = (key.width, key.height);
 
@@ -508,7 +510,9 @@ pub fn compute_tex(
         }
     }
 
+    //dbg!(&cs.name);
     gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
+    //dbg!(output_tex.texture_id);
 
     Ok(output_tex)
 }
@@ -520,6 +524,13 @@ pub fn raster_tex(
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
+    let output_tex = backend::texture::create_texture(*key);
+    let depth_buffer = create_render_buffer(RenderBufferKey {
+        width: key.width,
+        height: key.height,
+        format: gl::DEPTH_COMPONENT32F,
+    });
+
     let mut uniform_plumber = ShaderUniformPlumber::default();
 
     let raster_pipe = ctx.get(raster_pipe)?;
@@ -543,13 +554,6 @@ pub fn raster_tex(
             ));
         }
     };
-
-    let output_tex = backend::texture::create_texture(*key);
-    let depth_buffer = create_render_buffer(RenderBufferKey {
-        width: key.width,
-        height: key.height,
-        format: gl::DEPTH_COMPONENT32F,
-    });
 
     let fb_handle = {
         let mut handle: u32 = 0;
