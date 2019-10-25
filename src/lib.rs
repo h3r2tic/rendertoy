@@ -43,6 +43,7 @@ pub type Matrix4 = na::Matrix4<f32>;
 pub type Isometry3 = na::Isometry3<f32>;
 
 pub type Quaternion = na::Quaternion<f32>;
+pub type UnitQuaternion = na::UnitQuaternion<f32>;
 
 #[macro_use]
 extern crate failure;
