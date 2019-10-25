@@ -14,6 +14,8 @@ pub struct CargoPackageMap {
 #[snoozy]
 pub fn load_cargo_package_map(_ctx: &mut Context) -> Result<CargoPackageMap> {
     let config = Config::default()?;
+    let package_lock = config.acquire_package_cache_lock()?;
+
     let root = important_paths::find_root_manifest_for_wd(config.cwd())?;
     println!("Loading cargo package map from {}", root.to_string_lossy());
 
@@ -25,7 +27,7 @@ pub fn load_cargo_package_map(_ctx: &mut Context) -> Result<CargoPackageMap> {
 
     //println!("package: {:?}\ndependencies:\n", package.package_id());
     for (dep, _) in resolve.deps(package.package_id()) {
-        let mut source = dep.source_id().load(&config).unwrap();
+        let mut source = dep.source_id().load(&config, &Default::default()).unwrap();
         source.update()?;
 
         if let MaybePackage::Ready(pkg) = source.download(dep).unwrap() {
@@ -38,6 +40,7 @@ pub fn load_cargo_package_map(_ctx: &mut Context) -> Result<CargoPackageMap> {
     }
 
     let path = root.parent().unwrap().to_string_lossy().to_string();
+    std::mem::drop(package_lock);
 
     Ok(CargoPackageMap {
         name: package.name().to_string(),
