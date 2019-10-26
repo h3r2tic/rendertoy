@@ -5,8 +5,10 @@ use crate::backend;
 use snoozy::*;
 use std::mem::size_of;
 
-#[snoozy]
-pub fn upload_buffer<T: Copy + Send + 'static>(_ctx: &mut Context, contents: &T) -> Result<Buffer> {
+pub fn upload_buffer_impl<T: Copy + Send + 'static>(
+    _ctx: &mut Context,
+    contents: &T,
+) -> Result<Buffer> {
     let size_of_t = size_of::<T>();
 
     let res = backend::buffer::create_buffer(BufferKey {
@@ -26,6 +28,11 @@ pub fn upload_buffer<T: Copy + Send + 'static>(_ctx: &mut Context, contents: &T)
     }
 
     Ok(res)
+}
+
+#[snoozy]
+pub fn upload_buffer<T: Copy + Send + 'static>(ctx: &mut Context, contents: &T) -> Result<Buffer> {
+    upload_buffer_impl(ctx, contents)
 }
 
 use std::ops::Deref;

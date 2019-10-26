@@ -77,7 +77,23 @@ macro_rules! shader_uniforms {
     ($($($name:ident)? : $value:expr),* $(,)*) => {
         vec![
             $(ShaderUniformHolder::new(shader_uniforms!(@parse_name $($name)?), $value),)*
-        ];
+        ]
+    }
+}
+
+#[macro_export]
+macro_rules! shader_uniform_bundle {
+    (@parse_name $name:ident) => {
+        stringify!($name)
+    };
+    (@parse_name) => {
+        ""
+    };
+    ($($($name:ident)? : $value:expr),* $(,)*) => {
+        ShaderUniformHolder::new("",
+        vec![
+            $(ShaderUniformHolder::new(shader_uniforms!(@parse_name $($name)?), $value),)*
+        ])
     }
 }
 
