@@ -39,6 +39,7 @@ pub type Vector3 = na::Vector3<f32>;
 pub type Point4 = na::Point4<f32>;
 pub type Vector4 = na::Vector4<f32>;
 
+pub type Matrix3 = na::Matrix3<f32>;
 pub type Matrix4 = na::Matrix4<f32>;
 pub type Isometry3 = na::Isometry3<f32>;
 
@@ -74,26 +75,32 @@ extern "system" fn gl_debug_message(
     unsafe {
         let s = std::ffi::CStr::from_ptr(message);
 
-        let is_ignored_id = id == 131216; // Program/shader state info: GLSL shader * failed to compile. WAT.
-
-        let is_important_type = match type_ {
-            gl::DEBUG_TYPE_ERROR
-            | gl::DEBUG_TYPE_UNDEFINED_BEHAVIOR
-            | gl::DEBUG_TYPE_DEPRECATED_BEHAVIOR
-            | gl::DEBUG_TYPE_PORTABILITY => true,
+        let is_ignored_id = match id {
+            131216 => true, // Program/shader state info: GLSL shader * failed to compile. WAT.
+            131185 => true, // Buffer detailed info: (...) will use (...) memory as the source for buffer object operations.
             _ => false,
         };
 
-        if !is_important_type || is_ignored_id {
-            println!("GL debug: {}\n", s.to_string_lossy());
-        } else {
-            panic!(
-                "OpenGL Debug message ({}, {:x}, {:x}): {}",
-                id,
-                type_,
-                severity,
-                s.to_string_lossy()
-            );
+        if !is_ignored_id {
+            let is_important_type = match type_ {
+                gl::DEBUG_TYPE_ERROR
+                | gl::DEBUG_TYPE_UNDEFINED_BEHAVIOR
+                | gl::DEBUG_TYPE_DEPRECATED_BEHAVIOR
+                | gl::DEBUG_TYPE_PORTABILITY => true,
+                _ => false,
+            };
+
+            if !is_important_type {
+                println!("GL debug({}): {}\n", id, s.to_string_lossy());
+            } else {
+                panic!(
+                    "OpenGL Debug message ({}, {:x}, {:x}): {}",
+                    id,
+                    type_,
+                    severity,
+                    s.to_string_lossy()
+                );
+            }
         }
     }
 }
