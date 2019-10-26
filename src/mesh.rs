@@ -302,12 +302,12 @@ pub fn upload_raster_mesh(
         .collect::<Vec<_>>();
 
     Ok(shader_uniforms!(
-        "mesh_vertex_buf": upload_array_buffer(verts),
-        "mesh_uv_buf": upload_array_buffer(uvs),
-        "mesh_tangent_buf": upload_array_buffer(tangents),
-        "mesh_index_count": indices.len() as u32,
-        "mesh_index_buf": upload_array_buffer(indices),
-        "mesh_material_id_buf": upload_array_buffer(material_ids),
-        "mesh_materials_buf": upload_array_buffer(Box::new(materials)),
+        mesh_vertex_buf: upload_array_buffer(verts),
+        mesh_uv_buf: upload_array_buffer(uvs),
+        mesh_tangent_buf: upload_array_buffer(tangents),
+        mesh_index_count: indices.len() as u32,
+        mesh_index_buf: upload_array_buffer(indices),
+        mesh_material_id_buf: upload_array_buffer(material_ids),
+        mesh_materials_buf: upload_array_buffer(Box::new(materials)),
     ))
 }
