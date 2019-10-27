@@ -501,6 +501,56 @@ impl Rendertoy {
         selected_name
     }
 
+    fn draw_warnings(
+        &self,
+        vg_context: &nanovg::Context,
+        font: &Font,
+        warnings: impl Iterator<Item = String>,
+    ) {
+        let size = self
+            .gl_window
+            .get_inner_size()
+            .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
+            .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
+
+        let (width, height) = (size.width as i32, size.height as i32);
+
+        unsafe {
+            gl::Viewport(0, 0, width, height);
+        }
+
+        let (width, height) = (width as f32, height as f32);
+
+        vg_context.frame(
+            (width, height),
+            self.gl_window.get_hidpi_factor() as f32,
+            |frame| {
+                let text_options = TextOptions {
+                    size: 24.0,
+                    color: Color::from_rgb(255, 16, 4),
+                    align: Alignment::new().bottom().left(),
+                    transform: None,
+                    ..Default::default()
+                };
+
+                let mut text_shadow_options = text_options.clone();
+                text_shadow_options.color = Color::from_rgb(0, 0, 0);
+                text_shadow_options.blur = 1.0;
+
+                let metrics = frame.text_metrics(*font, text_options);
+
+                let warnings = warnings.take(8).collect::<Vec<_>>();
+
+                let mut y = height - metrics.line_height * (warnings.len() as f32);
+                for line in warnings {
+                    frame.text(*font, (10.0 + 1.0, y + 1.0), &line, text_shadow_options);
+                    frame.text(*font, (10.0, y), &line, text_options);
+                    y += metrics.line_height;
+                }
+            },
+        );
+    }
+
     pub fn draw_forever<F>(&mut self, mut callback: F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
@@ -536,6 +586,7 @@ impl Rendertoy {
             gpu_profiler::end_frame();
             gpu_debugger::end_frame();
 
+            self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
             self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
 
             running = self.next_frame();
@@ -545,6 +596,15 @@ impl Rendertoy {
 
 pub fn draw_fullscreen_texture(tex: &Texture, framebuffer_size: (u32, u32)) {
     backend::draw::draw_fullscreen_texture(tex.texture_id, framebuffer_size);
+}
+
+lazy_static! {
+    static ref RTOY_WARNINGS: std::sync::Mutex<Vec<String>> =
+        { std::sync::Mutex::new(Default::default()) };
+}
+
+pub fn rtoy_show_warning(text: String) {
+    RTOY_WARNINGS.lock().unwrap().push(text);
 }
 
 impl TextureKey {

@@ -267,6 +267,7 @@ struct ShaderUniformPlumber {
     img_unit: i32,
     ssbo_unit: u32,
     index_count: Option<u32>,
+    warnings: Vec<String>,
 }
 
 pub enum PlumberEvent<'a> {
@@ -324,6 +325,18 @@ impl ShaderUniformPlumber {
     ) -> Result<()> {
         let c_name = std::ffi::CString::new(uniform.name.clone()).unwrap();
         let loc = unsafe { gl::GetUniformLocation(program_handle, c_name.as_ptr()) };
+
+        if -1 == loc {
+            match uniform.value {
+                ShaderUniformValue::Bundle(_) => {}
+                ShaderUniformValue::BundleAsset(_) => {}
+                ShaderUniformValue::BufferAsset(_) => {}
+                _ => {
+                    self.warnings
+                        .push(format!("Shader uniform not found: {}", uniform.name).to_owned());
+                }
+            }
+        }
 
         match uniform.value {
             ShaderUniformValue::Bundle(_) => {}
@@ -569,6 +582,10 @@ pub fn compute_tex(
         })?;
         uniform_plumber.img_unit
     };
+
+    for warning in uniform_plumber.warnings.iter() {
+        crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
+    }
 
     let dispatch_size = (key.width, key.height);
 
