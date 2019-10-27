@@ -324,18 +324,22 @@ impl ShaderUniformPlumber {
         uniform: &ShaderUniformHolder,
     ) -> Result<()> {
         let c_name = std::ffi::CString::new(uniform.name.clone()).unwrap();
-        let loc = unsafe { gl::GetUniformLocation(program_handle, c_name.as_ptr()) };
 
-        if -1 == loc {
-            match uniform.value {
-                ShaderUniformValue::Bundle(_) => {}
-                ShaderUniformValue::BundleAsset(_) => {}
-                ShaderUniformValue::BufferAsset(_) => {}
-                _ => {
+        macro_rules! get_loc_no_warn {
+            () => {
+                gl::GetUniformLocation(program_handle, c_name.as_ptr())
+            };
+        }
+
+        macro_rules! get_loc {
+            () => {{
+                let loc = get_loc_no_warn!();
+                if -1 == loc {
                     self.warnings
                         .push(format!("Shader uniform not found: {}", uniform.name).to_owned());
                 }
-            }
+                loc
+            }};
         }
 
         match uniform.value {
@@ -364,6 +368,7 @@ impl ShaderUniformPlumber {
                 }
 
                 unsafe {
+                    let loc = get_loc!();
                     if loc != -1 {
                         let mut type_gl = 0;
                         let mut size = 0;
@@ -409,6 +414,7 @@ impl ShaderUniformPlumber {
                 let buf = ctx.get(buf_asset)?;
 
                 unsafe {
+                    let loc = get_loc_no_warn!();
                     if loc != -1 {
                         let mut type_gl = 0;
                         let mut size = 0;
@@ -464,29 +470,29 @@ impl ShaderUniformPlumber {
                 }
             }
             ShaderUniformValue::Float32(ref value) => unsafe {
-                gl::Uniform1f(loc, *value);
+                gl::Uniform1f(get_loc!(), *value);
             },
             ShaderUniformValue::Int32(ref value) => unsafe {
-                gl::Uniform1i(loc, *value);
+                gl::Uniform1i(get_loc!(), *value);
             },
             ShaderUniformValue::Uint32(ref value) => unsafe {
-                gl::Uniform1ui(loc, *value);
-
                 if uniform.name == "mesh_index_count" {
                     self.index_count = Some(*value);
+                } else {
+                    gl::Uniform1ui(get_loc!(), *value);
                 }
             },
             ShaderUniformValue::Ivec2(ref value) => unsafe {
-                gl::Uniform2i(loc, value.0, value.1);
+                gl::Uniform2i(get_loc!(), value.0, value.1);
             },
             ShaderUniformValue::Float32Asset(ref asset) => unsafe {
-                gl::Uniform1f(loc, *ctx.get(asset)?);
+                gl::Uniform1f(get_loc!(), *ctx.get(asset)?);
             },
             ShaderUniformValue::Uint32Asset(ref asset) => unsafe {
-                gl::Uniform1ui(loc, *ctx.get(asset)?);
+                gl::Uniform1ui(get_loc!(), *ctx.get(asset)?);
             },
             ShaderUniformValue::UsizeAsset(ref asset) => unsafe {
-                gl::Uniform1i(loc, *ctx.get(asset)? as i32);
+                gl::Uniform1i(get_loc!(), *ctx.get(asset)? as i32);
             },
         }
 
