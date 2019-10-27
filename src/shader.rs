@@ -50,11 +50,13 @@ pub struct ShaderUniformHolder {
 
 impl ShaderUniformHolder {
     pub fn new<T: Into<ShaderUniformValue> + 'static>(name: &str, value: T) -> ShaderUniformHolder {
+        Self::from_name_value(name, value.into())
+    }
+
+    pub fn from_name_value(name: &str, value: ShaderUniformValue) -> ShaderUniformHolder {
         let mut s = DefaultSnoozyHash::default();
         whatever_hash(&value, &mut s);
         let shallow_hash = std::hash::Hasher::finish(&mut s);
-
-        let value = value.into();
 
         ShaderUniformHolder {
             name: name.to_string(),
@@ -174,6 +176,26 @@ pub fn load_cs(ctx: &mut Context, path: &AssetPath) -> Result<ComputeShader> {
     Ok(ComputeShader {
         handle: backend::shader::make_program(&[shader_handle])?,
         name,
+    })
+}
+
+#[snoozy]
+pub fn load_cs_from_string(
+    _ctx: &mut Context,
+    source: &String,
+    name: &String,
+) -> Result<ComputeShader> {
+    let source = [shader_prepper::SourceChunk {
+        source: source.clone(),
+        file: "no-file".to_owned(),
+        line_offset: 0,
+    }];
+
+    let shader_handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
+
+    Ok(ComputeShader {
+        handle: backend::shader::make_program(&[shader_handle])?,
+        name: name.clone(),
     })
 }
 

@@ -312,16 +312,11 @@ pub fn upload_raster_mesh(
     ))
 }
 
-#[snoozy]
-pub fn raster_mesh_transform(
-    ctx: &mut Context,
-    offset: &Vector3,
-    rotation: &UnitQuaternion,
-) -> Result<Buffer> {
+pub fn raster_mesh_transform(offset: Vector3, rotation: UnitQuaternion) -> SnoozyRef<Buffer> {
     let model_to_world: Matrix4 = {
         let translation = Matrix4::new_translation(&Vector3::new(offset.x, offset.y, offset.z));
         translation * rotation.to_homogeneous()
     };
 
-    upload_buffer_impl(ctx, &model_to_world)
+    upload_buffer(model_to_world)
 }

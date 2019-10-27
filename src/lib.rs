@@ -15,6 +15,8 @@ mod shader;
 mod texture;
 mod viewport;
 
+pub mod compute_tex_macro;
+
 pub use gl;
 pub use nalgebra as na;
 pub use snoozy::*;
