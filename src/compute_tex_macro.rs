@@ -124,9 +124,9 @@ layout (local_size_x = 8, local_size_y = 8) in;
 void main() {{
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     vec2 uv = (vec2(pix) + 0.5) * outputTex_size.zw;
-    vec4 color = vec4(0, 0, 0, 1);
+    vec4 _output_color = vec4(0, 0, 0, 1);
     {tokens};
-    imageStore(outputTex, pix, color);
+    imageStore(outputTex, pix, _output_color);
 }}",
             uniforms = self.declare_uniforms(),
             tokens = Self::stringify_tokens(&self.tokens)
@@ -146,11 +146,11 @@ macro_rules! compute_tex {
         std::collections::VecDeque::new()
     };
     // A texture sample from an interpolated variable; must be a shader uniform
-    (@expr # @ $var:ident $($tts:tt)*) => {
+    (@expr @ $var:ident $($tts:tt)*) => {
         $crate::compute_tex_macro::image_filter_token_join(
             $crate::compute_tex_macro::ImageFilterToken::TextureSample($crate::compute_tex_macro::ImageFilterUniform {
                 name: stringify!($var).to_owned(),
-                value: $var.into(),
+                value: $var.clone().into(),
             }),
             compute_tex!(@expr $($tts)*)
         )
@@ -160,7 +160,7 @@ macro_rules! compute_tex {
         $crate::compute_tex_macro::image_filter_token_join(
             $crate::compute_tex_macro::ImageFilterToken::Uniform($crate::compute_tex_macro::ImageFilterUniform {
                 name: stringify!($var).to_owned(),
-                value: $var.into(),
+                value: $var.clone().into(),
             }),
             compute_tex!(@expr $($tts)*)
         )
@@ -206,20 +206,19 @@ macro_rules! compute_tex {
         "".to_owned()
     };
     (@munch_bindings $(# $binding:ident : $value:expr,)*) => {
-        $(let $binding = $value;)*
+        $(let $binding = $value.clone();)*
     };
     (
         $debug_name:expr,
         $tex_key:expr,
         $(# $binding:ident : $binding_value:expr,)*
-        color
         $(. $swizzle:ident)? = $($tts:tt)*
     ) => {
         {
             compute_tex!(@munch_bindings $(# $binding : $binding_value,)*);
 
             let mut tokens = compute_tex!(@expr $($tts)*);
-            let output_str = "color".to_owned() + &compute_tex!(@swizzle $($swizzle)?) + " = ";
+            let output_str = "_output_color".to_owned() + &compute_tex!(@swizzle $($swizzle)?) + " = ";
             tokens.push_front($crate::compute_tex_macro::ImageFilterToken::Expr(output_str));
 
             $crate::compute_tex_macro::ImageFilterDesc::new($debug_name.to_owned(), $tex_key, tokens).run()
