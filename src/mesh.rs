@@ -8,7 +8,7 @@ pub enum MeshMaterialMap {
 
 #[derive(Clone, Abomonation)]
 pub struct MeshMaterial {
-    pub maps: [u32; 2],
+    pub maps: [u32; 3],
     pub emissive: [f32; 3],
 }
 
@@ -68,6 +68,21 @@ fn load_gltf_material(
         }
     };
 
+    let albedo_map = mat
+        .pbr_metallic_roughness()
+        .base_color_texture()
+        .and_then(|tex| {
+            get_gltf_texture_source(tex.texture()).map(|path: String| -> MeshMaterialMap {
+                MeshMaterialMap::Asset {
+                    path: make_asset_path(path),
+                    params: TexParams {
+                        gamma: TexGamma::Srgb,
+                    },
+                }
+            })
+        })
+        .unwrap_or(MeshMaterialMap::Placeholder([127, 127, 127, 255]));
+
     let normal_map = mat
         .normal_texture()
         .and_then(|tex| get_gltf_texture_source(tex.texture()).map(make_material_map))
@@ -86,9 +101,9 @@ fn load_gltf_material(
     };
 
     (
-        vec![normal_map, spec_map],
+        vec![normal_map, spec_map, albedo_map],
         MeshMaterial {
-            maps: [0, 1],
+            maps: [0, 1, 2],
             emissive,
         },
     )
@@ -257,7 +272,7 @@ pub fn make_raster_mesh(
 
 #[derive(Copy, Clone, Abomonation, Default, Serialize)]
 struct GpuMaterial {
-    maps: [u64; 2],
+    maps: [u64; 3],
 }
 
 fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
