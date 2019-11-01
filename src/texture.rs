@@ -1,7 +1,7 @@
 pub use crate::backend::texture::{Texture, TextureKey};
 
 use crate::backend;
-use crate::blob::{load_blob, AssetPath};
+use crate::blob::{load_blob, AssetPath, Blob};
 
 use snoozy::*;
 
@@ -59,15 +59,9 @@ where
     Ok(res)
 }
 
-#[snoozy]
-pub fn load_tex_with_params(
-    ctx: &mut Context,
-    path: &AssetPath,
-    params: &TexParams,
-) -> Result<Texture> {
+fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
     use image::{DynamicImage, GenericImageView};
 
-    let blob = ctx.get(&load_blob(path.clone()))?;
     let img = image::load_from_memory(&blob.contents)?;
 
     let dims = img.dimensions();
@@ -96,6 +90,56 @@ pub fn load_tex_with_params(
             gl::RGBA,
         ),
         _ => Err(format_err!("Unsupported image format")),
+    }
+}
+
+fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
+    let mut img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
+
+    // Flip the image because OpenGL.
+    for y in 0..img.height / 2 {
+        for x in 0..img.width {
+            let y2 = img.height - 1 - y;
+            img.data.swap(y * img.width + x, y2 * img.width + x);
+        }
+    }
+
+    println!("Loaded image: {}x{} HDR", img.width, img.height);
+
+    let res = backend::texture::create_texture(TextureKey {
+        width: img.width as u32,
+        height: img.height as u32,
+        format: gl::RGB32F,
+    });
+    unsafe {
+        gl::BindTexture(gl::TEXTURE_2D, res.texture_id);
+        gl::TexSubImage2D(
+            gl::TEXTURE_2D,
+            0,
+            0,
+            0,
+            img.width as i32,
+            img.height as i32,
+            gl::RGB,
+            gl::FLOAT,
+            std::mem::transmute(img.data.as_ptr()),
+        );
+    }
+    Ok(res)
+}
+
+#[snoozy]
+pub fn load_tex_with_params(
+    ctx: &mut Context,
+    path: &AssetPath,
+    params: &TexParams,
+) -> Result<Texture> {
+    let blob = ctx.get(&load_blob(path.clone()))?;
+
+    if path.asset_name.ends_with(".hdr") {
+        load_hdr_tex(&*blob, params)
+    } else {
+        load_ldr_tex(&*blob, params)
     }
 }
 
