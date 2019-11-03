@@ -335,3 +335,17 @@ pub fn raster_mesh_transform(offset: Vector3, rotation: UnitQuaternion) -> Snooz
 
     upload_buffer(model_to_world)
 }
+
+pub fn upload_raster_scene(
+    scene: &[(SnoozyRef<TriangleMesh>, Vector3, UnitQuaternion)],
+) -> ShaderUniformBundle {
+    scene
+        .iter()
+        .map(|(mesh, position, rotation)| {
+            shader_uniform_bundle!(
+                instance_transform: raster_mesh_transform(*position, *rotation),
+                :upload_raster_mesh(make_raster_mesh(mesh.clone()))
+            )
+        })
+        .collect()
+}
