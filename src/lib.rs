@@ -616,3 +616,65 @@ impl TextureKey {
         }
     }
 }
+
+pub trait RenderPass: Any {
+    fn prepare_frame(
+        &mut self,
+        view_constants: &ViewConstants,
+        frame_state: &FrameState,
+        frame_idx: u32,
+    );
+}
+
+use std::any::Any;
+pub trait AsAny {
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T> AsAny for T
+where
+    T: RenderPass,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// Blanket-implement a trait combining RenderPass and AsAny
+// for anything that implements RenderPass + AsAny.
+pub trait RenderPassAny: RenderPass + AsAny {}
+impl<T> RenderPassAny for T where T: RenderPass + AsAny {}
+
+impl<F> RenderPass for F
+where
+    F: FnMut(&ViewConstants, &FrameState, u32),
+    F: 'static,
+{
+    fn prepare_frame(
+        &mut self,
+        view_constants: &ViewConstants,
+        frame_state: &FrameState,
+        frame_idx: u32,
+    ) {
+        (*self)(view_constants, frame_state, frame_idx)
+    }
+}
+
+pub type RenderPassList = Vec<Box<dyn RenderPassAny>>;
+
+// Convenient .add method which adds a trait object to the render pass list,
+// but returns a borrow of the concrete type just added. Supports the following pattern:
+//
+// let ao_tex = sub_passes
+//     .add(rtoy_samples::ssao::Ssao::new(tex_key, gbuffer_tex.clone()))
+//     .get_output_tex();
+pub trait AddRenderPass {
+    fn add<P: RenderPassAny + 'static>(&mut self, pass: P) -> &P;
+}
+
+impl AddRenderPass for RenderPassList {
+    fn add<P: RenderPassAny + 'static>(&mut self, pass: P) -> &P {
+        self.push(Box::new(pass));
+        self.last().unwrap().as_any().downcast_ref::<P>().unwrap()
+    }
+}

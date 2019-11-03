@@ -3,6 +3,7 @@ use crate::{na, na::UnitQuaternion, FrameState, Matrix4, Point3, Vector3, Virtua
 #[derive(PartialEq, Clone)]
 pub struct CameraMatrices {
     pub view_to_clip: Matrix4,
+    pub clip_to_view: Matrix4,
     pub world_to_view: Matrix4,
     pub view_to_world: Matrix4,
 }
@@ -45,11 +46,6 @@ pub struct FirstPersonCameraInput {
     pitch_delta: f32,
     dt: f32,
 }
-
-/*fn highp_invert_matrix(m: &Matrix4) -> Option<Matrix4> {
-    let m: na::Matrix4<f64> = na::convert(*m);
-    m.try_inverse().map(|m| na::convert::<_, na::Matrix4<f32>>(m))
-}*/
 
 impl<'a> From<&FrameState<'a>> for FirstPersonCameraInput {
     fn from(frame_state: &FrameState<'a>) -> FirstPersonCameraInput {
@@ -162,19 +158,31 @@ impl Camera for FirstPersonCamera {
     }
 
     fn calc_matrices(&self) -> CameraMatrices {
-        let view_to_clip = {
+        let (view_to_clip, clip_to_view) = {
             let fov = self.fov.to_radians();
             let znear = self.near_dist;
 
             let h = (0.5 * fov).cos() / (0.5 * fov).sin();
             let w = h / self.aspect;
 
-            let mut m = Matrix4::zeros();
-            m.m11 = w;
-            m.m22 = h;
-            m.m34 = znear;
-            m.m43 = -1.0;
-            m
+            (
+                {
+                    let mut m = Matrix4::zeros();
+                    m.m11 = w;
+                    m.m22 = h;
+                    m.m34 = znear;
+                    m.m43 = -1.0;
+                    m
+                },
+                {
+                    let mut m = Matrix4::zeros();
+                    m.m11 = 1.0 / w;
+                    m.m22 = 1.0 / h;
+                    m.m34 = -1.0;
+                    m.m43 = 1.0 / znear;
+                    m
+                },
+            )
         };
 
         let rotation = self.interp_rot.to_homogeneous();
@@ -198,9 +206,10 @@ impl Camera for FirstPersonCamera {
         };
 
         CameraMatrices {
-            view_to_clip: view_to_clip,
-            world_to_view: world_to_view,
-            view_to_world: view_to_world,
+            view_to_clip,
+            clip_to_view,
+            world_to_view,
+            view_to_world,
         }
     }
 }
@@ -237,34 +246,27 @@ impl<CameraType: Camera> Camera for CameraConvergenceEnforcer<CameraType> {
         self.camera.update(input);
 
         let new_matrices = self.camera.calc_matrices();
-        let view_to_clip: na::Matrix4<f64> = na::convert(new_matrices.view_to_clip);
 
-        let error = if let Some(clip_to_view) = view_to_clip.try_inverse() {
-            let cs_corners: [na::Vector4<f64>; 4] = [
-                na::Vector4::new(-1.0, -1.0, 1e-5, 1.0),
-                na::Vector4::new(1.0, -1.0, 1e-5, 1.0),
-                na::Vector4::new(-1.0, 1.0, 1e-5, 1.0),
-                na::Vector4::new(1.0, 1.0, 1e-5, 1.0),
-            ];
+        let cs_corners: [na::Vector4<f64>; 4] = [
+            na::Vector4::new(-1.0, -1.0, 1e-5, 1.0),
+            na::Vector4::new(1.0, -1.0, 1e-5, 1.0),
+            na::Vector4::new(-1.0, 1.0, 1e-5, 1.0),
+            na::Vector4::new(1.0, 1.0, 1e-5, 1.0),
+        ];
 
-            let clip_to_prev_clip =
-                na::convert::<_, na::Matrix4<f64>>(self.prev_matrices.view_to_clip)
-                    * na::convert::<_, na::Matrix4<f64>>(self.prev_matrices.world_to_view)
-                    * na::convert::<_, na::Matrix4<f64>>(new_matrices.view_to_world)
-                    * clip_to_view;
+        let clip_to_prev_clip = na::convert::<_, na::Matrix4<f64>>(self.prev_matrices.view_to_clip)
+            * na::convert::<_, na::Matrix4<f64>>(self.prev_matrices.world_to_view)
+            * na::convert::<_, na::Matrix4<f64>>(new_matrices.view_to_world)
+            * na::convert::<_, na::Matrix4<f64>>(new_matrices.view_to_clip);
 
-            let error: f64 = cs_corners
-                .into_iter()
-                .map(|cs_cur| {
-                    let cs_prev = clip_to_prev_clip * cs_cur;
-                    let cs_prev = cs_prev * (1.0 / cs_prev.w);
-                    (cs_prev.xy() - cs_cur.xy()).norm()
-                })
-                .sum();
-            error
-        } else {
-            std::f64::MAX
-        };
+        let error: f64 = cs_corners
+            .into_iter()
+            .map(|cs_cur| {
+                let cs_prev = clip_to_prev_clip * cs_cur;
+                let cs_prev = cs_prev * (1.0 / cs_prev.w);
+                (cs_prev.xy() - cs_cur.xy()).norm()
+            })
+            .sum();
 
         if error > 0.001 || error > self.prev_error * 1.05 + 1e-5 {
             self.frozen_matrices = new_matrices.clone();
