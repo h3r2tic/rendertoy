@@ -120,6 +120,7 @@ pub struct Rendertoy {
     gl_state: GlState,
     selected_debug_name: Option<String>,
     last_frame_instant: std::time::Instant,
+    show_gui: bool,
 }
 
 #[derive(Clone)]
@@ -266,6 +267,7 @@ impl Rendertoy {
             gl_state: GlState { vao },
             selected_debug_name: None,
             last_frame_instant: std::time::Instant::now(),
+            show_gui: true,
         }
     }
 
@@ -320,7 +322,13 @@ impl Rendertoy {
                         self.gl_window.resize(phys_size);
                     }
                     glutin::WindowEvent::KeyboardInput { input, .. } => {
-                        keyboard_events.push(*input);
+                        if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
+                            if input.state == ElementState::Pressed {
+                                self.show_gui = !self.show_gui;
+                            }
+                        } else {
+                            keyboard_events.push(*input);
+                        }
                     }
                     glutin::WindowEvent::CursorMoved {
                         position: logical_pos,
@@ -586,8 +594,10 @@ impl Rendertoy {
             gpu_profiler::end_frame();
             gpu_debugger::end_frame();
 
-            self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
-            self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
+            if self.show_gui {
+                self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
+                self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
+            }
 
             running = self.next_frame();
         }
