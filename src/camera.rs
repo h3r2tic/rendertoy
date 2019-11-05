@@ -257,7 +257,7 @@ impl<CameraType: Camera> Camera for CameraConvergenceEnforcer<CameraType> {
         let clip_to_prev_clip = na::convert::<_, na::Matrix4<f64>>(self.prev_matrices.view_to_clip)
             * na::convert::<_, na::Matrix4<f64>>(self.prev_matrices.world_to_view)
             * na::convert::<_, na::Matrix4<f64>>(new_matrices.view_to_world)
-            * na::convert::<_, na::Matrix4<f64>>(new_matrices.view_to_clip);
+            * na::convert::<_, na::Matrix4<f64>>(new_matrices.clip_to_view);
 
         let error: f64 = cs_corners
             .into_iter()
@@ -268,7 +268,7 @@ impl<CameraType: Camera> Camera for CameraConvergenceEnforcer<CameraType> {
             })
             .sum();
 
-        if error > 0.001 || error > self.prev_error * 1.05 + 1e-5 {
+        if error > 1e-5 || error > self.prev_error * 1.05 + 1e-5 {
             self.frozen_matrices = new_matrices.clone();
             self.is_converged = false;
         } else {
