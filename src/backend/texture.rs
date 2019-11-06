@@ -99,11 +99,15 @@ impl TransientResource for Texture {
             );
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
 
             let mut sampler_id = 0;
             gl::GenSamplers(1, &mut sampler_id);
             gl::SamplerParameteri(sampler_id, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
             gl::SamplerParameteri(sampler_id, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
+            gl::SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
 
             let bindless_handle = gl::GetTextureHandleARB(texture_id);
             gl::MakeTextureHandleResidentARB(bindless_handle);

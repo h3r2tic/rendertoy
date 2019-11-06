@@ -8,6 +8,7 @@ pub enum MeshMaterialMap {
 
 #[derive(Clone, Abomonation)]
 pub struct MeshMaterial {
+    pub base_color_mult: [f32; 4],
     pub maps: [u32; 3],
     pub emissive: [f32; 3],
 }
@@ -16,6 +17,7 @@ pub struct MeshMaterial {
 pub struct TriangleMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
+    pub colors: Vec<[f32; 4]>,
     pub uvs: Vec<[f32; 2]>,
     pub tangents: Vec<[f32; 4]>,
     pub material_ids: Vec<u32>, // per index, but can be flat shaded
@@ -100,9 +102,12 @@ fn load_gltf_material(
         mat.emissive_factor()
     };
 
+    let base_color_mult = mat.pbr_metallic_roughness().base_color_factor();
+
     (
         vec![normal_map, spec_map, albedo_map],
         MeshMaterial {
+            base_color_mult,
             maps: [0, 1, 2],
             emissive,
         },
@@ -163,6 +168,13 @@ pub fn load_gltf_scene(ctx: &mut Context, path: &AssetPath, scale: &f32) -> Resu
                         vec![[0.0, 0.0]; positions.len()]
                     };
 
+                    // Collect colors (optional)
+                    let colors = if let Some(iter) = reader.read_colors(0) {
+                        iter.into_rgba_f32().collect::<Vec<_>>()
+                    } else {
+                        vec![[1.0, 1.0, 1.0, 1.0]; positions.len()]
+                    };
+
                     // Collect material ids
                     let mut material_ids = vec![res_material_index; positions.len()];
 
@@ -197,6 +209,10 @@ pub fn load_gltf_scene(ctx: &mut Context, path: &AssetPath, scale: &f32) -> Resu
                                 .unwrap()
                                 .normalize();
                         res.normals.push([norm.x, norm.y, norm.z]);
+                    }
+
+                    for c in colors {
+                        res.colors.push(c);
                     }
 
                     res.uvs.append(&mut uvs);
@@ -235,6 +251,7 @@ pub struct RasterGpuMesh {
     verts: Vec<RasterGpuVertex>,
     uvs: Vec<[f32; 2]>,
     tangents: Vec<[f32; 4]>,
+    colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
     material_ids: Vec<u32>,
     materials: Vec<MeshMaterial>,
@@ -263,6 +280,7 @@ pub fn make_raster_mesh(
         verts,
         uvs: mesh.uvs.clone(),
         tangents: mesh.tangents.clone(),
+        colors: mesh.colors.clone(),
         indices: mesh.indices.clone(),
         material_ids: mesh.material_ids.clone(),
         materials: mesh.materials.clone(),
@@ -270,9 +288,20 @@ pub fn make_raster_mesh(
     })
 }
 
-#[derive(Copy, Clone, Abomonation, Default, Serialize)]
+#[derive(Copy, Clone, Abomonation, Serialize)]
+#[repr(C)]
 struct GpuMaterial {
+    base_color_mult: [f32; 4],
     maps: [u64; 3],
+}
+
+impl Default for GpuMaterial {
+    fn default() -> Self {
+        Self {
+            base_color_mult: [0.0f32; 4],
+            maps: [0; 3],
+        }
+    }
 }
 
 fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
@@ -300,6 +329,7 @@ pub fn upload_raster_mesh(
 
     let verts = ArcView::new(&mesh, |m| &m.verts);
     let uvs = ArcView::new(&mesh, |m| &m.uvs);
+    let colors = ArcView::new(&mesh, |m| &m.colors);
     let tangents = ArcView::new(&mesh, |m| &m.tangents);
     let indices = ArcView::new(&mesh, |m| &m.indices);
     let material_ids = ArcView::new(&mesh, |m| &m.material_ids);
@@ -309,6 +339,7 @@ pub fn upload_raster_mesh(
         .iter()
         .map(|m| {
             let mut res = GpuMaterial::default();
+            res.base_color_mult = m.base_color_mult;
             for (i, map_id) in m.maps.iter().enumerate() {
                 res.maps[i] = upload_material_map(ctx, &mesh.maps[*map_id as usize]);
             }
@@ -319,6 +350,7 @@ pub fn upload_raster_mesh(
     Ok(shader_uniforms!(
         mesh_vertex_buf: upload_array_buffer(verts),
         mesh_uv_buf: upload_array_buffer(uvs),
+        mesh_color_buf: upload_array_buffer(colors),
         mesh_tangent_buf: upload_array_buffer(tangents),
         mesh_index_count: indices.len() as u32,
         mesh_index_buf: upload_array_buffer(indices),
