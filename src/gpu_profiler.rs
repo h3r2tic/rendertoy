@@ -34,8 +34,12 @@ impl Default for GpuProfilerScope {
 }
 
 impl GpuProfilerScope {
+    pub fn hit_count(&self) -> u32 {
+        self.write_head.min(self.hits.len() as u32)
+    }
+
     pub fn average_duration_millis(&self) -> f64 {
-        let count = (self.write_head.min(self.hits.len() as u32) as f64).max(1.0);
+        let count = (self.hit_count() as f64).max(1.0);
         self.hits.iter().sum::<u64>() as f64 / count / 1_000_000.0
     }
 }

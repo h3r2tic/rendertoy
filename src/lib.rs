@@ -480,6 +480,8 @@ impl Rendertoy {
                 frame.text(*font, (10.0, y), &fps, text_options);
                 y += metrics.line_height * 2.0;
 
+                let mut total_time_ms = 0.0;
+
                 gpu_profiler::with_stats(|stats| {
                     /*for (name, scope) in stats.scopes.iter() {
                         let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
@@ -507,8 +509,10 @@ impl Rendertoy {
 
                     for name in stats.order.iter() {
                         if let Some(scope) = stats.scopes.get(name) {
-                            let text =
-                                format!("{}: {:.3}ms", name, scope.average_duration_millis());
+                            let average_duration_millis = scope.average_duration_millis();
+                            let text = format!("{}: {:.3}ms", name, average_duration_millis);
+                            total_time_ms += average_duration_millis;
+
                             let (uw, _) = frame.text_bounds(*font, (0.0, 0.0), &text, text_options);
 
                             // self.mouse_state.pos.y
@@ -532,6 +536,14 @@ impl Rendertoy {
                         }
                     }
                 });
+
+                let text = format!("TOTAL: {:.3}ms", total_time_ms);
+
+                let color = Color::from_rgb(255, 255, 255);
+                text_options.color = color;
+
+                frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
+                frame.text(*font, (10.0, y), &text, text_options);
             },
         );
 
