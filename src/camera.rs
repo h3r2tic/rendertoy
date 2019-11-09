@@ -71,6 +71,12 @@ impl<'a> From<&FrameState<'a>> for FirstPersonCameraInput {
         if frame_state.keys.is_down(VirtualKeyCode::D) {
             move_vec.x += 1.0;
         }
+        if frame_state.keys.is_down(VirtualKeyCode::Q) {
+            move_vec.y += -1.0;
+        }
+        if frame_state.keys.is_down(VirtualKeyCode::E) {
+            move_vec.y += 1.0;
+        }
 
         if frame_state.keys.is_down(VirtualKeyCode::LControl) {
             move_vec *= 0.1;

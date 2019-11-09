@@ -121,6 +121,7 @@ pub struct Rendertoy {
     selected_debug_name: Option<String>,
     last_frame_instant: std::time::Instant,
     show_gui: bool,
+    average_frame_time: f32,
 }
 
 #[derive(Clone)]
@@ -160,6 +161,7 @@ pub struct RendertoyConfig {
     pub width: u32,
     pub height: u32,
     pub vsync: bool,
+    pub graphics_debugging: bool,
 }
 
 fn parse_resolution(s: &str) -> Result<(u32, u32)> {
@@ -191,10 +193,19 @@ impl RendertoyConfig {
             })
             .unwrap_or(true);
 
+        let graphics_debugging = matches
+            .value_of("ndebug")
+            .map(|val| {
+                !<bool as FromStr>::from_str(val)
+                    .expect("Could not parse the value of 'ndebug' as bool")
+            })
+            .unwrap_or(true);
+
         RendertoyConfig {
             width,
             height,
             vsync,
+            graphics_debugging,
         }
     }
 }
@@ -207,7 +218,7 @@ impl Rendertoy {
             .with_dimensions(LogicalSize::new(cfg.width as f64, cfg.height as f64));
         let context = glutin::ContextBuilder::new()
             .with_vsync(cfg.vsync)
-            .with_gl_debug_flag(true)
+            .with_gl_debug_flag(cfg.graphics_debugging)
             .with_gl_profile(glutin::GlProfile::Compatibility) // nanovg doesn't work with Core.
             //.with_gl_profile(glutin::GlProfile::Core)
             .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4, 3)));
@@ -268,6 +279,7 @@ impl Rendertoy {
             selected_debug_name: None,
             last_frame_instant: std::time::Instant::now(),
             show_gui: true,
+            average_frame_time: 0.0,
         }
     }
 
@@ -286,6 +298,11 @@ impl Rendertoy {
                     .long("vsync")
                     .help("Wait for V-Sync")
                     .takes_value(true),
+            )
+            .arg(
+                clap::Arg::with_name("ndebug")
+                    .long("ndebug")
+                    .help("Disable graphics debugging"),
             )
             .get_matches();
 
@@ -386,6 +403,14 @@ impl Rendertoy {
         let dt = now - self.last_frame_instant;
         self.last_frame_instant = now;
 
+        self.average_frame_time = if 0.0f32 == self.average_frame_time {
+            dt.as_secs_f32()
+        } else {
+            let dt = dt.as_secs_f32();
+            let blend = (-4.0 * dt).exp();
+            self.average_frame_time * blend + dt * (1.0 - blend)
+        };
+
         let state = FrameState {
             mouse: &self.mouse_state,
             keys: &self.keyboard,
@@ -447,9 +472,13 @@ impl Rendertoy {
                 text_shadow_options.color = Color::from_rgb(0, 0, 0);
                 text_shadow_options.blur = 1.0;
 
-                let metrics = frame.text_metrics(*font, text_options);
+                let fps = format!("FPS: {:.1}", 1.0 / self.average_frame_time);
 
+                let metrics = frame.text_metrics(*font, text_options);
                 let mut y = 10.0 + metrics.line_height;
+                frame.text(*font, (10.0 + 1.0, y + 1.0), &fps, text_shadow_options);
+                frame.text(*font, (10.0, y), &fps, text_options);
+                y += metrics.line_height * 2.0;
 
                 gpu_profiler::with_stats(|stats| {
                     /*for (name, scope) in stats.scopes.iter() {
