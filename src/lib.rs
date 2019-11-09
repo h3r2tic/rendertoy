@@ -119,6 +119,7 @@ pub struct Rendertoy {
     keyboard: KeyboardState,
     gl_state: GlState,
     selected_debug_name: Option<String>,
+    locked_debug_name: Option<String>,
     last_frame_instant: std::time::Instant,
     show_gui: bool,
     average_frame_time: f32,
@@ -277,6 +278,7 @@ impl Rendertoy {
             keyboard: KeyboardState::new(),
             gl_state: GlState { vao },
             selected_debug_name: None,
+            locked_debug_name: None,
             last_frame_instant: std::time::Instant::now(),
             show_gui: true,
             average_frame_time: 0.0,
@@ -388,6 +390,12 @@ impl Rendertoy {
         running
     }
 
+    fn get_currently_debugged_texture(&self) -> Option<&String> {
+        self.selected_debug_name
+            .as_ref()
+            .or(self.locked_debug_name.as_ref())
+    }
+
     fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
@@ -430,9 +438,13 @@ impl Rendertoy {
 
             let mut debugged_texture: Option<u32> = None;
             gpu_debugger::with_textures(|data| {
+                /*debugged_texture = self
+                .selected_debug_name
+                .as_ref()
+                .or(self.locked_debug_name.as_ref())
+                .and_then(|name| data.textures.get(name).cloned());*/
                 debugged_texture = self
-                    .selected_debug_name
-                    .as_ref()
+                    .get_currently_debugged_texture()
                     .and_then(|name| data.textures.get(name).cloned());
             });
 
@@ -444,7 +456,11 @@ impl Rendertoy {
         });
     }
 
-    fn draw_profiling_stats(&self, vg_context: &nanovg::Context, font: &Font) -> Option<String> {
+    fn draw_profiling_stats(
+        &mut self,
+        vg_context: &nanovg::Context,
+        font: &Font,
+    ) -> Option<String> {
         let size = self
             .gl_window
             .get_inner_size()
@@ -528,7 +544,11 @@ impl Rendertoy {
                                 selected_name = Some(name.to_owned());
                             }
 
-                            let color = if hit {
+                            if (self.mouse_state.button_mask & 1) != 0 {
+                                self.locked_debug_name = selected_name.clone();
+                            }
+
+                            let color = if Some(name) == self.get_currently_debugged_texture() {
                                 Color::from_rgb(255, 64, 16)
                             } else {
                                 Color::from_rgb(255, 255, 255)
