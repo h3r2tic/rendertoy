@@ -162,6 +162,7 @@ pub struct RendertoyConfig {
     pub height: u32,
     pub vsync: bool,
     pub graphics_debugging: bool,
+    pub core_gl: bool,
 }
 
 fn parse_resolution(s: &str) -> Result<(u32, u32)> {
@@ -193,19 +194,15 @@ impl RendertoyConfig {
             })
             .unwrap_or(true);
 
-        let graphics_debugging = matches
-            .value_of("ndebug")
-            .map(|val| {
-                !<bool as FromStr>::from_str(val)
-                    .expect("Could not parse the value of 'ndebug' as bool")
-            })
-            .unwrap_or(true);
+        let graphics_debugging = !matches.is_present("ndebug");
+        let core_gl = matches.is_present("core-gl");
 
         RendertoyConfig {
             width,
             height,
             vsync,
             graphics_debugging,
+            core_gl,
         }
     }
 }
@@ -219,8 +216,11 @@ impl Rendertoy {
         let context = glutin::ContextBuilder::new()
             .with_vsync(cfg.vsync)
             .with_gl_debug_flag(cfg.graphics_debugging)
-            .with_gl_profile(glutin::GlProfile::Compatibility) // nanovg doesn't work with Core.
-            //.with_gl_profile(glutin::GlProfile::Core)
+            .with_gl_profile(if cfg.core_gl {
+                glutin::GlProfile::Core
+            } else {
+                glutin::GlProfile::Compatibility
+            })
             .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4, 3)));
         let gl_window = glutin::GlWindow::new(window, context, &events_loop).unwrap();
 
@@ -303,6 +303,11 @@ impl Rendertoy {
                 clap::Arg::with_name("ndebug")
                     .long("ndebug")
                     .help("Disable graphics debugging"),
+            )
+            .arg(
+                clap::Arg::with_name("core-gl")
+                    .long("core-gl")
+                    .help("Use the Core profile of OpenGL (disables UI)"),
             )
             .get_matches();
 
@@ -635,7 +640,7 @@ impl Rendertoy {
             gpu_profiler::end_frame();
             gpu_debugger::end_frame();
 
-            if self.show_gui {
+            if self.show_gui && !self.cfg.core_gl {
                 self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
                 self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
             }
