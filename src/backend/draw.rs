@@ -43,10 +43,25 @@ pub fn draw_fullscreen_texture(tex: u32, framebuffer_size: (u32, u32)) {
         };
     }
 
+    lazy_static! {
+        static ref SAMPLER_ID: u32 = {
+            let mut sampler_id = 0;
+            unsafe {
+                gl::GenSamplers(1, &mut sampler_id);
+                gl::SamplerParameteri(sampler_id, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+                gl::SamplerParameteri(sampler_id, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+                gl::SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+                gl::SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            }
+            sampler_id
+        };
+    }
+
     unsafe {
         gl::UseProgram(*PROG);
 
         gl::ActiveTexture(gl::TEXTURE0);
+        gl::BindSampler(0, *SAMPLER_ID);
         gl::BindTexture(gl::TEXTURE_2D, tex);
 
         let loc = gl::GetUniformLocation(*PROG, "Texture\0".as_ptr() as *const i8);
