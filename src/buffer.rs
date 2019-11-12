@@ -5,7 +5,7 @@ use crate::backend;
 use snoozy::*;
 use std::mem::size_of;
 
-fn upload_buffer_impl<T: Copy + Send +Sync + 'static>(
+fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
     _ctx: &mut Context,
     contents: &T,
 ) -> Result<Buffer> {
@@ -31,7 +31,10 @@ fn upload_buffer_impl<T: Copy + Send +Sync + 'static>(
 }
 
 #[snoozy]
-pub fn upload_buffer<T: Copy + Send + Sync + 'static>(ctx: &mut Context, contents: &T) -> Result<Buffer> {
+pub fn upload_buffer<T: Copy + Send + Sync + 'static>(
+    ctx: &mut Context,
+    contents: &T,
+) -> Result<Buffer> {
     upload_buffer_impl(ctx, contents)
 }
 

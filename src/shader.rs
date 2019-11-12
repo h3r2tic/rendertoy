@@ -7,6 +7,8 @@ use crate::texture::{Texture, TextureKey};
 use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
 use snoozy::*;
+use std::collections::HashMap;
+use std::ffi::CStr;
 
 macro_rules! def_shader_uniform_types {
     (pub enum $enum_name:ident { $($name:ident($type:ty)),* $(,)* }) => {
@@ -102,6 +104,55 @@ macro_rules! shader_uniform_bundle {
 pub struct ComputeShader {
     pub name: String,
     handle: u32,
+    reflection: ShaderReflection,
+}
+
+#[derive(Debug)]
+pub struct ShaderUniformReflection {
+    pub location: i32,
+    pub gl_type: u32,
+}
+
+#[derive(Debug)]
+pub struct ShaderReflection {
+    uniforms: HashMap<String, ShaderUniformReflection>,
+}
+
+fn reflect_shader(program_handle: u32) -> ShaderReflection {
+    let mut uniform_count = 0i32;
+    unsafe {
+        gl::GetProgramiv(program_handle, gl::ACTIVE_UNIFORMS, &mut uniform_count);
+    }
+
+    let uniforms: HashMap<String, ShaderUniformReflection> = (0..uniform_count)
+        .map(|index| unsafe {
+            let mut name_len = 0;
+            let mut gl_type = 0;
+            let mut gl_size = 0;
+
+            let mut name_str: Vec<u8> = vec![b'\0'; 128];
+            gl::GetActiveUniform(
+                program_handle,
+                index as u32,
+                127,
+                &mut name_len,
+                &mut gl_size,
+                &mut gl_type,
+                name_str.as_mut_ptr() as *mut i8,
+            );
+
+            let location = gl::GetUniformLocation(program_handle, name_str.as_ptr() as *const i8);
+
+            let name = CStr::from_ptr(name_str.as_ptr() as *const i8)
+                .to_string_lossy()
+                .into_owned();
+            let refl = ShaderUniformReflection { location, gl_type };
+
+            (name, refl)
+        })
+        .collect();
+
+    ShaderReflection { uniforms }
 }
 
 impl Drop for ComputeShader {
@@ -167,15 +218,19 @@ pub fn load_cs(ctx: &mut Context, path: &AssetPath) -> Result<ComputeShader> {
         },
     )?;
 
-    let shader_handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
+    let handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
     let name = std::path::Path::new(&path.asset_name)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or("unknown".to_string());
 
+    let handle = backend::shader::make_program(&[handle])?;
+    let reflection = reflect_shader(handle);
+
     Ok(ComputeShader {
-        handle: backend::shader::make_program(&[shader_handle])?,
+        handle,
         name,
+        reflection,
     })
 }
 
@@ -191,11 +246,14 @@ pub fn load_cs_from_string(
         line_offset: 0,
     }];
 
-    let shader_handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
+    let handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
+    let handle = backend::shader::make_program(&[handle])?;
+    let reflection = reflect_shader(handle);
 
     Ok(ComputeShader {
-        handle: backend::shader::make_program(&[shader_handle])?,
+        handle,
         name: name.clone(),
+        reflection,
     })
 }
 
@@ -245,6 +303,7 @@ pub fn load_ps(ctx: &mut Context, path: &AssetPath) -> Result<RasterSubShader> {
 
 pub struct RasterPipeline {
     handle: u32,
+    reflection: ShaderReflection,
 }
 
 #[snoozy]
@@ -257,15 +316,17 @@ pub fn make_raster_pipeline(
         .map(|a| ctx.get(&*a).map(|s| s.handle))
         .collect();
 
-    Ok(RasterPipeline {
-        handle: backend::shader::make_program(shaders?.as_slice())?,
-    })
+    let handle = backend::shader::make_program(shaders?.as_slice())?;
+    let reflection = reflect_shader(handle);
+
+    Ok(RasterPipeline { handle, reflection })
 }
 
 #[derive(Default)]
 struct ShaderUniformPlumber {
     img_unit: i32,
     ssbo_unit: u32,
+    ubo_unit: u32,
     index_count: Option<u32>,
     warnings: Vec<String>,
 }
@@ -321,24 +382,26 @@ impl ShaderUniformPlumber {
         &mut self,
         ctx: &mut Context,
         program_handle: u32,
+        reflection: &ShaderReflection,
         uniform: &ShaderUniformHolder,
     ) -> Result<()> {
         let c_name = std::ffi::CString::new(uniform.name.clone()).unwrap();
 
-        macro_rules! get_loc_no_warn {
+        macro_rules! get_uniform_no_warn {
             () => {
-                gl::GetUniformLocation(program_handle, c_name.as_ptr())
+                reflection.uniforms.get(&uniform.name)
             };
         }
 
-        macro_rules! get_loc {
+        macro_rules! get_uniform {
             () => {{
-                let loc = get_loc_no_warn!();
-                if -1 == loc {
+                if let Some(u) = reflection.uniforms.get(&uniform.name) {
+                    Some(u)
+                } else {
                     self.warnings
                         .push(format!("Shader uniform not found: {}", uniform.name).to_owned());
+                    None
                 }
-                loc
             }};
         }
 
@@ -349,16 +412,10 @@ impl ShaderUniformPlumber {
             ShaderUniformValue::TextureAsset(ref tex_asset) => {
                 let tex = ctx.get(tex_asset)?;
 
-                let size_loc = unsafe {
-                    let size_name = uniform.name.clone() + "_size";
-                    let c_name = std::ffi::CString::new(size_name).unwrap();
-                    gl::GetUniformLocation(program_handle, c_name.as_ptr())
-                };
-
-                if size_loc != -1 {
+                if let Some(loc) = reflection.uniforms.get(&(uniform.name.clone() + "_size")) {
                     unsafe {
                         gl::Uniform4f(
-                            size_loc,
+                            loc.location,
                             tex.key.width as f32,
                             tex.key.height as f32,
                             1.0 / tex.key.width as f32,
@@ -368,23 +425,8 @@ impl ShaderUniformPlumber {
                 }
 
                 unsafe {
-                    let loc = get_loc!();
-                    if loc != -1 {
-                        let mut type_gl = 0;
-                        let mut size = 0;
-                        gl::GetActiveUniform(
-                            program_handle,
-                            loc as u32,
-                            0,
-                            std::ptr::null_mut(),
-                            &mut size,
-                            &mut type_gl,
-                            std::ptr::null_mut(),
-                        );
-
-                        //dbg!((&uniform.name, tex.texture_id));
-
-                        if gl::IMAGE_2D == type_gl {
+                    if let Some(loc) = get_uniform!() {
+                        if gl::IMAGE_2D == loc.gl_type {
                             let level = 0;
                             let layered = gl::FALSE;
                             gl::BindImageTexture(
@@ -396,16 +438,16 @@ impl ShaderUniformPlumber {
                                 gl::READ_ONLY,
                                 tex.key.format,
                             );
-                            gl::Uniform1i(loc, self.img_unit);
+                            gl::Uniform1i(loc.location, self.img_unit);
                             self.img_unit += 1;
-                        } else if gl::SAMPLER_2D == type_gl {
+                        } else if gl::SAMPLER_2D == loc.gl_type {
                             gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
                             gl::BindTexture(gl::TEXTURE_2D, tex.texture_id);
                             gl::BindSampler(self.img_unit as u32, tex.sampler_id);
-                            gl::Uniform1i(loc, self.img_unit);
+                            gl::Uniform1i(loc.location, self.img_unit);
                             self.img_unit += 1;
                         } else {
-                            panic!("unspupported sampler type: {:x}", type_gl);
+                            panic!("unspupported sampler type: {:x}", loc.gl_type);
                         }
                     }
                 }
@@ -413,86 +455,101 @@ impl ShaderUniformPlumber {
             ShaderUniformValue::BufferAsset(ref buf_asset) => {
                 let buf = ctx.get(buf_asset)?;
 
-                unsafe {
-                    let loc = get_loc_no_warn!();
-                    if loc != -1 {
-                        let mut type_gl = 0;
-                        let mut size = 0;
-                        gl::GetActiveUniform(
-                            program_handle,
-                            loc as u32,
-                            0,
-                            std::ptr::null_mut(),
-                            &mut size,
-                            &mut type_gl,
-                            std::ptr::null_mut(),
-                        );
+                let u_block_index =
+                    unsafe { gl::GetUniformBlockIndex(program_handle, c_name.as_ptr()) };
 
-                        if gl::SAMPLER_BUFFER == type_gl
-                            || gl::UNSIGNED_INT_SAMPLER_BUFFER == type_gl
-                            || gl::INT_SAMPLER_BUFFER == type_gl
-                        {
-                            gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
-                            gl::BindTexture(
-                                gl::TEXTURE_BUFFER,
-                                buf.texture_id
-                                    .expect("buffer doesn't have a texture buffer"),
-                            );
-                            gl::BindSampler(self.img_unit as u32, 0);
-                            gl::Uniform1i(loc, self.img_unit);
-                            self.img_unit += 1;
-                        } else {
-                            panic!(
-                                "Buffer textures can only be bound to gsamplerBuffer; got {:x}",
-                                type_gl
-                            );
-                        }
-                    } else {
-                        let block_index = gl::GetProgramResourceIndex(
+                let ss_block_index = unsafe {
+                    gl::GetProgramResourceIndex(
+                        program_handle,
+                        gl::SHADER_STORAGE_BLOCK,
+                        c_name.as_ptr(),
+                    )
+                };
+
+                if u_block_index != std::u32::MAX {
+                    unsafe {
+                        gl::UniformBlockBinding(program_handle, u_block_index, self.ubo_unit);
+                        gl::BindBufferBase(gl::UNIFORM_BUFFER, self.ubo_unit, buf.buffer_id);
+                    }
+                    self.ubo_unit += 1;
+                } else if ss_block_index != std::u32::MAX {
+                    unsafe {
+                        gl::ShaderStorageBlockBinding(
                             program_handle,
-                            gl::SHADER_STORAGE_BLOCK,
-                            c_name.as_ptr(),
+                            ss_block_index,
+                            self.ssbo_unit,
                         );
-                        if block_index != std::u32::MAX {
-                            gl::ShaderStorageBlockBinding(
-                                program_handle,
-                                block_index,
-                                self.ssbo_unit,
-                            );
-                            gl::BindBufferBase(
-                                gl::SHADER_STORAGE_BUFFER,
-                                self.ssbo_unit,
-                                buf.buffer_id,
-                            );
-                            self.ssbo_unit += 1;
+                        gl::BindBufferBase(
+                            gl::SHADER_STORAGE_BUFFER,
+                            self.ssbo_unit,
+                            buf.buffer_id,
+                        );
+                    }
+                    self.ssbo_unit += 1;
+                } else {
+                    unsafe {
+                        if let Some(loc) = get_uniform_no_warn!() {
+                            if gl::SAMPLER_BUFFER == loc.gl_type
+                                || gl::UNSIGNED_INT_SAMPLER_BUFFER == loc.gl_type
+                                || gl::INT_SAMPLER_BUFFER == loc.gl_type
+                            {
+                                gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
+                                gl::BindTexture(
+                                    gl::TEXTURE_BUFFER,
+                                    buf.texture_id
+                                        .expect("buffer doesn't have a texture buffer"),
+                                );
+                                gl::BindSampler(self.img_unit as u32, 0);
+                                gl::Uniform1i(loc.location, self.img_unit);
+                                self.img_unit += 1;
+                            } else {
+                                panic!(
+                                    "Buffer textures can only be bound to gsamplerBuffer; got {:x}",
+                                    loc.gl_type
+                                );
+                            }
                         }
                     }
                 }
             }
             ShaderUniformValue::Float32(ref value) => unsafe {
-                gl::Uniform1f(get_loc!(), *value);
+                if let Some(loc) = get_uniform!() {
+                    gl::Uniform1f(loc.location, *value);
+                }
             },
             ShaderUniformValue::Int32(ref value) => unsafe {
-                gl::Uniform1i(get_loc!(), *value);
+                if let Some(loc) = get_uniform!() {
+                    gl::Uniform1i(loc.location, *value);
+                }
             },
             ShaderUniformValue::Uint32(ref value) => unsafe {
                 if uniform.name == "mesh_index_count" {
                     self.index_count = Some(*value);
                 } else {
-                    gl::Uniform1ui(get_loc!(), *value);
+                    if let Some(loc) = get_uniform!() {
+                        gl::Uniform1ui(loc.location, *value);
+                    }
                 }
             },
             ShaderUniformValue::Ivec2(ref value) => unsafe {
-                gl::Uniform2i(get_loc!(), value.0, value.1);
+                if let Some(loc) = get_uniform!() {
+                    gl::Uniform2i(loc.location, value.0, value.1);
+                }
             },
             ShaderUniformValue::Float32Asset(ref asset) => unsafe {
-                gl::Uniform1f(get_loc!(), *ctx.get(asset)?);
+                if let Some(loc) = get_uniform!() {
+                    gl::Uniform1f(loc.location, *ctx.get(asset)?);
+                }
             },
             ShaderUniformValue::Uint32Asset(ref asset) => unsafe {
-                gl::Uniform1ui(get_loc!(), *ctx.get(asset)?);
+                if let Some(loc) = get_uniform!() {
+                    gl::Uniform1ui(loc.location, *ctx.get(asset)?);
+                }
             },
             ShaderUniformValue::UsizeAsset(ref asset) => unsafe {
-                gl::Uniform1i(get_loc!(), *ctx.get(asset)? as i32);
+                if let Some(loc) = get_uniform!() {
+                    gl::Uniform1i(loc.location, *ctx.get(asset)? as i32);
+                }
             },
         }
 
@@ -503,6 +560,7 @@ impl ShaderUniformPlumber {
         &mut self,
         ctx: &mut Context,
         program_handle: u32,
+        reflection: &ShaderReflection,
         uniforms: &Vec<ShaderUniformHolder>,
         uniform_handler_fn: &mut UniformHandlerFn,
     ) -> Result<()>
@@ -510,15 +568,19 @@ impl ShaderUniformPlumber {
         UniformHandlerFn:
             FnMut(&mut Context, &mut dyn ShaderUniformPlumberCallback, PlumberEvent) -> Result<()>,
     {
-        impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32) {
+        impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32, &ShaderReflection) {
             fn plumb(&mut self, ctx: &mut Context, uniform: &ShaderUniformHolder) -> Result<()> {
-                self.0.plumb_uniform(ctx, self.1, uniform)
+                self.0.plumb_uniform(ctx, self.1, self.2, uniform)
             }
         }
 
         macro_rules! scope_event {
             ($event_type: expr) => {
-                let _ = uniform_handler_fn(ctx, &mut (&mut *self, program_handle), $event_type)?;
+                let _ = uniform_handler_fn(
+                    ctx,
+                    &mut (&mut *self, program_handle, reflection),
+                    $event_type,
+                )?;
             };
         }
 
@@ -530,7 +592,7 @@ impl ShaderUniformPlumber {
                 _ => {
                     let _ = uniform_handler_fn(
                         ctx,
-                        &mut (&mut *self, program_handle),
+                        &mut (&mut *self, program_handle, reflection),
                         PlumberEvent::SetUniform(uniform),
                     )?;
                 }
@@ -542,13 +604,13 @@ impl ShaderUniformPlumber {
             match uniform.value {
                 ShaderUniformValue::Bundle(ref bundle) => {
                     scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(ctx, program_handle, bundle, uniform_handler_fn)?;
+                    self.plumb(ctx, program_handle, reflection, bundle, uniform_handler_fn)?;
                     scope_event!(PlumberEvent::LeaveScope);
                 }
                 ShaderUniformValue::BundleAsset(ref bundle) => {
                     let bundle = &*ctx.get(bundle)?;
                     scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(ctx, program_handle, bundle, uniform_handler_fn)?;
+                    self.plumb(ctx, program_handle, reflection, bundle, uniform_handler_fn)?;
                     scope_event!(PlumberEvent::LeaveScope);
                 }
                 _ => {}
@@ -579,13 +641,19 @@ pub fn compute_tex(
             gl::UseProgram(cs.handle);
         }
 
-        uniform_plumber.plumb(ctx, cs.handle, uniforms, &mut |ctx, plumber, event| {
-            if let PlumberEvent::SetUniform(uniform) = event {
-                plumber.plumb(ctx, uniform)
-            } else {
-                Ok(())
-            }
-        })?;
+        uniform_plumber.plumb(
+            ctx,
+            cs.handle,
+            &cs.reflection,
+            uniforms,
+            &mut |ctx, plumber, event| {
+                if let PlumberEvent::SetUniform(uniform) = event {
+                    plumber.plumb(ctx, uniform)
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
         uniform_plumber.img_unit
     };
 
@@ -727,6 +795,7 @@ pub fn raster_tex(
         uniform_plumber.plumb(
             ctx,
             raster_pipe.handle,
+            &raster_pipe.reflection,
             uniforms,
             &mut |ctx, plumber, event| match event {
                 PlumberEvent::SetUniform(uniform) => {
