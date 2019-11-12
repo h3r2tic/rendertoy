@@ -21,7 +21,7 @@ pub fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
     Ok(Blob { contents: buffer })
 }
 
-#[derive(Serialize, Debug, Clone, Abomonation)]
+#[derive(Serialize, Debug, Clone, Abomonation, Hash)]
 pub struct AssetPath {
     pub crate_name: String,
     pub asset_name: String,

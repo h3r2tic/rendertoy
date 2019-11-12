@@ -36,8 +36,8 @@ def_shader_uniform_types! {
         UsizeAsset(SnoozyRef<usize>),
         TextureAsset(SnoozyRef<Texture>),
         BufferAsset(SnoozyRef<Buffer>),
-        Bundle(Vec<ShaderUniformHolder>),
-        BundleAsset(SnoozyRef<Vec<ShaderUniformHolder>>),
+        Bundle(ShaderUniformBundle),
+        BundleAsset(SnoozyRef<ShaderUniformBundle>),
     }
 }
 
