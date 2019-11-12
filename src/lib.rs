@@ -234,6 +234,10 @@ impl Rendertoy {
         let mut vao: u32 = 0;
 
         unsafe {
+            use std::ffi::CStr;
+            println!("GL_VENDOR: {:?}", CStr::from_ptr(gl::GetString(gl::VENDOR) as *const i8));
+            println!("GL_RENDERER: {:?}", CStr::from_ptr(gl::GetString(gl::RENDERER) as *const i8));
+
             gl::DebugMessageCallback(Some(gl_debug_message), std::ptr::null_mut());
 
             // Disable everything by default
