@@ -20,7 +20,7 @@ gl = { path = "lib/gl" }
 image = "0.22"
 hdrldr = "0.1.2"
 relative-path = "1.0"
-cargo = "0.39"
+cargo_metadata = "0.9"
 clap = "2.33"
 nalgebra = { version = "0.18",  features = ["serde-serialize"] }
 libflate = "0.1"
