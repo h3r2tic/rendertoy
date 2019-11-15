@@ -776,7 +776,7 @@ pub fn raster_tex(
         gl::Viewport(0, 0, key.width as i32, key.height as i32);
         gl::DepthFunc(gl::GEQUAL);
         gl::Enable(gl::DEPTH_TEST);
-        gl::Disable(gl::CULL_FACE);
+        gl::Enable(gl::CULL_FACE);
 
         gl::ClearColor(0.0, 0.0, 0.0, 0.0);
         gl::ClearDepth(0.0);
