@@ -22,7 +22,6 @@ pub mod compute_tex_macro;
 pub use gl;
 pub use nalgebra as na;
 pub use snoozy::*;
-use tokio::prelude::*;
 use tokio::runtime::Runtime;
 
 pub use self::blob::*;
@@ -652,7 +651,7 @@ impl Rendertoy {
 
             dbg!();
 
-            let mut font = None;
+            let font;
             {
                 let snapshot = get_snapshot();
                 let blob = &*snapshot

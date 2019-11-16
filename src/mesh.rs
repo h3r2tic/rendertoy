@@ -1,6 +1,5 @@
 use super::*;
 use futures::future::join_all;
-use futures::future::JoinAll;
 
 #[derive(Clone, Abomonation)]
 pub enum MeshMaterialMap {

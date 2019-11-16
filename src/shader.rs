@@ -6,42 +6,55 @@ use crate::gpu_profiler;
 use crate::texture::{Texture, TextureKey};
 use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
+use snoozy::futures::future::{try_join_all, BoxFuture, FutureExt};
 use snoozy::*;
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::pin::Pin;
-use std::sync::Arc;
 
 macro_rules! def_shader_uniform_types {
+    (@resolved_type SnoozyRef<ShaderUniformBundle>) => {
+        ResolvedShaderUniformBundle
+    };
     (@resolved_type SnoozyRef<$t:ty>) => {
-        Pin<Arc<$t>>
+        $t
+    };
+    (@resolved_type ShaderUniformBundle) => {
+        ResolvedShaderUniformBundle
     };
     (@resolved_type $t:ty) => {
-        &'a $t
+        $t
+    };
+    (@resolve $ctx:ident SnoozyRef<ShaderUniformBundle>, $v:ident) => {
+        resolve($ctx, &*$ctx.get($v).await?).await?
     };
     (@resolve $ctx:ident SnoozyRef<$t:ty>, $v:ident) => {
-        $ctx.get($v).await?
+        (*$ctx.get($v).await?).clone()
+    };
+    (@resolve $ctx:ident ShaderUniformBundle, $v:ident) => {
+        resolve($ctx, $v).await?
     };
     (@resolve $ctx:ident $t:ty, $v:ident) => {
-        $v
+        (*$v).clone()
     };
     ($($name:ident($($type:tt)*)),* $(,)*) => {
-		#[derive(Debug, Serialize)]
+		#[derive(Clone, Debug, Serialize)]
 		pub enum ShaderUniformValue {
 			$($name($($type)*)),*
 		}
 
-		pub enum ResolvedShaderUniformValue<'a> {
+		pub enum ResolvedShaderUniformValue {
 			$($name(def_shader_uniform_types!(@resolved_type $($type)*))),*
 		}
 
         impl ShaderUniformValue {
-            pub async fn resolve(&self, ctx: &Context) -> Result<ResolvedShaderUniformValue<'_>> {
-                match self {
-                    $(ShaderUniformValue::$name(v) => Ok(ResolvedShaderUniformValue::$name(
-                        def_shader_uniform_types!(@resolve ctx $($type)*, v)
-                    ))),*
-                }
+            pub fn resolve<'a, 'b: 'a>(&'a self, ctx: &'b Context) -> BoxFuture<'a, Result<ResolvedShaderUniformValue>> {
+                async move {
+                    match self {
+                        $(ShaderUniformValue::$name(v) => Ok(ResolvedShaderUniformValue::$name(
+                            def_shader_uniform_types!(@resolve ctx $($type)*, v)
+                        ))),*
+                    }
+                }.boxed()
             }
 		}
 
@@ -69,11 +82,15 @@ def_shader_uniform_types! {
     BundleAsset(SnoozyRef<ShaderUniformBundle>),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ShaderUniformHolder {
     name: String,
     value: ShaderUniformValue,
-    shallow_hash: u64,
+}
+
+pub struct ResolvedShaderUniformHolder {
+    name: String,
+    value: ResolvedShaderUniformValue,
 }
 
 impl ShaderUniformHolder {
@@ -84,17 +101,30 @@ impl ShaderUniformHolder {
     pub fn from_name_value(name: &str, value: ShaderUniformValue) -> ShaderUniformHolder {
         let mut s = DefaultSnoozyHash::default();
         whatever_hash(&value, &mut s);
-        let shallow_hash = std::hash::Hasher::finish(&mut s);
 
         ShaderUniformHolder {
             name: name.to_string(),
-            shallow_hash,
             value,
         }
+    }
+
+    pub async fn resolve(&self, ctx: &Context) -> Result<ResolvedShaderUniformHolder> {
+        Ok(ResolvedShaderUniformHolder {
+            name: self.name.clone(),
+            value: self.value.resolve(ctx).await?,
+        })
     }
 }
 
 pub type ShaderUniformBundle = Vec<ShaderUniformHolder>;
+pub type ResolvedShaderUniformBundle = Vec<ResolvedShaderUniformHolder>;
+
+async fn resolve(
+    ctx: &Context,
+    uniforms: &Vec<ShaderUniformHolder>,
+) -> Result<Vec<ResolvedShaderUniformHolder>> {
+    try_join_all(uniforms.iter().map(|u| u.resolve(ctx))).await
+}
 
 #[macro_export]
 macro_rules! shader_uniforms {
@@ -358,71 +388,27 @@ struct ShaderUniformPlumber {
     warnings: Vec<String>,
 }
 
-pub enum PlumberEvent<'a, 'b, 'c> {
+pub enum PlumberEvent<'a, 'b> {
     SetUniform {
         name: &'a str,
-        value: &'b ResolvedShaderUniformValue<'c>,
+        value: &'b ResolvedShaderUniformValue,
     },
     EnterScope,
     LeaveScope,
 }
 
 pub trait ShaderUniformPlumberCallback {
-    fn plumb(
-        &mut self,
-        ctx: &Context,
-        name: &str,
-        value: &ResolvedShaderUniformValue,
-    ) -> Result<()>;
+    fn plumb(&mut self, name: &str, value: &ResolvedShaderUniformValue);
 }
 
 impl ShaderUniformPlumber {
-    async fn prepare(&self, ctx: &Context, uniforms: &Vec<ShaderUniformHolder>) -> Result<()> {
-        // Eval input parameters
-        for uniform in uniforms.iter() {
-            // TODO: bundles
-            let _ = uniform.value.resolve(ctx).await?;
-            /*match uniform.value {
-                ShaderUniformValue::TextureAsset(ref asset) => {
-                    ctx.get(asset).await?;
-                }
-                ShaderUniformValue::BufferAsset(ref asset) => {
-                    ctx.get(asset).await?;
-                }
-                ShaderUniformValue::Float32Asset(ref asset) => {
-                    ctx.get(asset).await?;
-                }
-                ShaderUniformValue::Uint32Asset(ref asset) => {
-                    ctx.get(asset).await?;
-                }
-                ShaderUniformValue::UsizeAsset(ref asset) => {
-                    ctx.get(asset).await?;
-                }
-                ShaderUniformValue::Bundle(ref bundle) => {
-                    self.prepare(ctx, &bundle).await?;
-                }
-                ShaderUniformValue::BundleAsset(ref bundle) => {
-                    let bundle = &*ctx.get(bundle).await?;
-                    self.prepare(ctx, bundle).await?;
-                }
-                ShaderUniformValue::Float32(_)
-                | ShaderUniformValue::Uint32(_)
-                | ShaderUniformValue::Int32(_)
-                | ShaderUniformValue::Ivec2(_) => {}
-            }*/
-        }
-
-        Ok(())
-    }
-
     fn plumb_uniform(
         &mut self,
-        ctx: &Context,
         program_handle: u32,
         reflection: &ShaderReflection,
         name: &str,
         value: &ResolvedShaderUniformValue,
-    ) -> Result<()> {
+    ) {
         let c_name = std::ffi::CString::new(name.clone()).unwrap();
 
         macro_rules! get_uniform_no_warn {
@@ -548,20 +534,20 @@ impl ShaderUniformPlumber {
             }
             ResolvedShaderUniformValue::Float32(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1f(loc.location, **value);
+                    gl::Uniform1f(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::Int32(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1i(loc.location, **value);
+                    gl::Uniform1i(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::Uint32(value) => unsafe {
                 if name == "mesh_index_count" {
-                    self.index_count = Some(**value);
+                    self.index_count = Some(*value);
                 } else {
                     if let Some(loc) = get_uniform!() {
-                        gl::Uniform1ui(loc.location, **value);
+                        gl::Uniform1ui(loc.location, *value);
                     }
                 }
             },
@@ -572,72 +558,56 @@ impl ShaderUniformPlumber {
             },
             ResolvedShaderUniformValue::Float32Asset(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1f(loc.location, **value);
+                    gl::Uniform1f(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::Uint32Asset(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1ui(loc.location, **value);
+                    gl::Uniform1ui(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::UsizeAsset(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1i(loc.location, **value as i32);
+                    gl::Uniform1i(loc.location, *value as i32);
                 }
             },
         }
-
-        Ok(())
     }
 
-    async fn plumb<UniformHandlerFn>(
+    fn plumb<UniformHandlerFn>(
         &mut self,
-        ctx: &Context,
         program_handle: u32,
         reflection: &ShaderReflection,
-        uniforms: &Vec<ShaderUniformHolder>,
+        uniforms: &Vec<ResolvedShaderUniformHolder>,
         uniform_handler_fn: &mut UniformHandlerFn,
-    ) -> Result<()>
-    where
-        UniformHandlerFn:
-            FnMut(&Context, &mut dyn ShaderUniformPlumberCallback, PlumberEvent) -> Result<()>,
+    ) where
+        UniformHandlerFn: FnMut(&mut dyn ShaderUniformPlumberCallback, PlumberEvent),
     {
         impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32, &ShaderReflection) {
-            fn plumb(
-                &mut self,
-                ctx: &Context,
-                name: &str,
-                value: &ResolvedShaderUniformValue,
-            ) -> Result<()> {
-                self.0.plumb_uniform(ctx, self.1, self.2, name, value)
+            fn plumb(&mut self, name: &str, value: &ResolvedShaderUniformValue) {
+                self.0.plumb_uniform(self.1, self.2, name, value)
             }
         }
 
         macro_rules! scope_event {
             ($event_type: expr) => {
-                let _ = uniform_handler_fn(
-                    ctx,
-                    &mut (&mut *self, program_handle, reflection),
-                    $event_type,
-                )?;
+                uniform_handler_fn(&mut (&mut *self, program_handle, reflection), $event_type);
             };
         }
 
-        // Do non-bundle values first so that the become visible to bundles
+        // Do non-bundle values first so that they become visible to bundle handlers
         for uniform in uniforms.iter() {
             match uniform.value {
-                ShaderUniformValue::Bundle(_) => {}
-                ShaderUniformValue::BundleAsset(_) => {}
+                ResolvedShaderUniformValue::Bundle(_) => {}
+                ResolvedShaderUniformValue::BundleAsset(_) => {}
                 _ => {
-                    let value = uniform.value.resolve(ctx).await?;
-                    let _ = uniform_handler_fn(
-                        ctx,
+                    uniform_handler_fn(
                         &mut (&mut *self, program_handle, reflection),
                         PlumberEvent::SetUniform {
                             name: &uniform.name,
-                            value: &value,
+                            value: &uniform.value,
                         },
-                    )?;
+                    );
                 }
             }
         }
@@ -645,24 +615,15 @@ impl ShaderUniformPlumber {
         // Now process bundles
         for uniform in uniforms.iter() {
             match uniform.value {
-                ShaderUniformValue::Bundle(ref bundle) => {
-                    unimplemented!();
-                    /*scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(ctx, program_handle, reflection, bundle, uniform_handler_fn).await?;
-                    scope_event!(PlumberEvent::LeaveScope);*/
-                }
-                ShaderUniformValue::BundleAsset(ref bundle) => {
-                    unimplemented!();
-                    /*let bundle = &*ctx.get(bundle)?;
+                ResolvedShaderUniformValue::Bundle(ref bundle)
+                | ResolvedShaderUniformValue::BundleAsset(ref bundle) => {
                     scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(ctx, program_handle, reflection, bundle, uniform_handler_fn).await?;
-                    scope_event!(PlumberEvent::LeaveScope);*/
+                    self.plumb(program_handle, reflection, bundle, uniform_handler_fn);
+                    scope_event!(PlumberEvent::LeaveScope);
                 }
                 _ => {}
             }
         }
-
-        Ok(())
     }
 }
 
@@ -680,27 +641,22 @@ pub async fn compute_tex(
     let cs = ctx.get(cs).await?;
 
     let mut img_unit = {
-        uniform_plumber.prepare(ctx, uniforms).await?;
+        let uniforms = resolve(ctx, uniforms).await?;
 
         unsafe {
             gl::UseProgram(cs.handle);
         }
 
-        uniform_plumber
-            .plumb(
-                ctx,
-                cs.handle,
-                &cs.reflection,
-                uniforms,
-                &mut |ctx, plumber, event| {
-                    if let PlumberEvent::SetUniform { value, name } = event {
-                        plumber.plumb(ctx, name, value)
-                    } else {
-                        Ok(())
-                    }
-                },
-            )
-            .await?;
+        uniform_plumber.plumb(
+            cs.handle,
+            &cs.reflection,
+            &uniforms,
+            &mut |plumber, event| {
+                if let PlumberEvent::SetUniform { value, name } = event {
+                    plumber.plumb(name, value)
+                }
+            },
+        );
         uniform_plumber.img_unit
     };
 
@@ -778,7 +734,7 @@ pub async fn raster_tex(
     });
 
     let mut uniform_plumber = ShaderUniformPlumber::default();
-    uniform_plumber.prepare(ctx, uniforms).await?;
+    let uniforms = resolve(ctx, uniforms).await?;
 
     let raster_pipe = ctx.get(raster_pipe).await?;
     let mut img_unit = 0;
@@ -839,55 +795,48 @@ pub async fn raster_tex(
 
         let mut mesh_stack = vec![MeshDrawData::default()];
 
-        uniform_plumber
-            .plumb(
-                ctx,
-                raster_pipe.handle,
-                &raster_pipe.reflection,
-                uniforms,
-                &mut |ctx, plumber, event| match event {
-                    PlumberEvent::SetUniform { name, value } => {
-                        match value {
-                            ResolvedShaderUniformValue::BufferAsset(buf)
-                                if name == "mesh_index_buf" =>
-                            {
-                                mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer_id);
-                            }
-                            ResolvedShaderUniformValue::Uint32(value)
-                                if name == "mesh_index_count" =>
-                            {
-                                mesh_stack.last_mut().unwrap().index_count = Some(**value);
-                            }
-                            _ => {}
+        uniform_plumber.plumb(
+            raster_pipe.handle,
+            &raster_pipe.reflection,
+            &uniforms,
+            &mut |plumber, event| match event {
+                PlumberEvent::SetUniform { name, value } => {
+                    match value {
+                        ResolvedShaderUniformValue::BufferAsset(buf)
+                            if name == "mesh_index_buf" =>
+                        {
+                            mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer_id);
                         }
+                        ResolvedShaderUniformValue::Uint32(value) if name == "mesh_index_count" => {
+                            mesh_stack.last_mut().unwrap().index_count = Some(*value);
+                        }
+                        _ => {}
+                    }
 
-                        plumber.plumb(ctx, name, value)
-                    }
-                    PlumberEvent::EnterScope => {
-                        mesh_stack.push(Default::default());
-                        Ok(())
-                    }
-                    PlumberEvent::LeaveScope => {
-                        let mesh = mesh_stack.pop().unwrap();
-                        if let Some(index_count) = mesh.index_count {
-                            if let Some(index_buffer) = mesh.index_buffer {
-                                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
-                                gl::DrawElements(
-                                    gl::TRIANGLES,
-                                    index_count as i32,
-                                    gl::UNSIGNED_INT,
-                                    std::ptr::null(),
-                                );
-                                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-                            } else {
-                                gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
-                            }
+                    plumber.plumb(name, value)
+                }
+                PlumberEvent::EnterScope => {
+                    mesh_stack.push(Default::default());
+                }
+                PlumberEvent::LeaveScope => {
+                    let mesh = mesh_stack.pop().unwrap();
+                    if let Some(index_count) = mesh.index_count {
+                        if let Some(index_buffer) = mesh.index_buffer {
+                            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
+                            gl::DrawElements(
+                                gl::TRIANGLES,
+                                index_count as i32,
+                                gl::UNSIGNED_INT,
+                                std::ptr::null(),
+                            );
+                            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+                        } else {
+                            gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
                         }
-                        Ok(())
                     }
-                },
-            )
-            .await?;
+                }
+            },
+        );
 
         gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
         gl::DeleteFramebuffers(1, &fb_handle);
