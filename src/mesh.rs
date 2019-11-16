@@ -1,4 +1,6 @@
 use super::*;
+use futures::future::join_all;
+use futures::future::JoinAll;
 
 #[derive(Clone, Abomonation)]
 pub enum MeshMaterialMap {
@@ -115,7 +117,7 @@ fn load_gltf_material(
 }
 
 #[snoozy]
-pub async fn load_gltf_scene(ctx: &mut Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
+pub async fn load_gltf_scene(ctx: &Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
     let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx).await?)?;
 
     if let Some(scene) = gltf.default_scene() {
@@ -260,7 +262,7 @@ pub struct RasterGpuMesh {
 
 #[snoozy]
 pub async fn make_raster_mesh(
-    ctx: &mut Context,
+    ctx: &Context,
     mesh: &SnoozyRef<TriangleMesh>,
 ) -> Result<RasterGpuMesh> {
     let mesh = ctx.get(mesh).await?;
@@ -304,7 +306,7 @@ impl Default for GpuMaterial {
     }
 }
 
-async fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
+async fn upload_material_map(ctx: &Context, map: &MeshMaterialMap) -> u64 {
     let tex = match *map {
         MeshMaterialMap::Asset {
             ref path,
@@ -322,7 +324,7 @@ async fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
 
 #[snoozy]
 pub async fn upload_raster_mesh(
-    ctx: &mut Context,
+    ctx: &Context,
     mesh: &SnoozyRef<RasterGpuMesh>,
 ) -> Result<ShaderUniformBundle> {
     let mesh = ctx.get(mesh).await?;
@@ -334,16 +336,29 @@ pub async fn upload_raster_mesh(
     let indices = ArcView::new(&mesh, |m| &m.indices);
     let material_ids = ArcView::new(&mesh, |m| &m.material_ids);
 
-    let materials: Vec<MeshMaterial> = Vec::with_capacity(mesh.materials.len());
-    /*for m in mesh.materials.iter() {
-        let mut res = GpuMaterial::default();
-        res.base_color_mult = m.base_color_mult;
-        for (i, map_id) in m.maps.iter().enumerate() {
-            res.maps[i] = upload_material_map(ctx, &mesh.maps[*map_id as usize]).await;
+    let mesh_materials = &mesh.clone().materials;
+    let mesh_maps = &mesh.clone().maps;
+
+    let materials = join_all(mesh_materials.iter().cloned().map(|m| {
+        async move {
+            let mut res = GpuMaterial::default();
+            res.base_color_mult = m.base_color_mult;
+
+            let maps = join_all(
+                m.maps
+                    .iter()
+                    .map(|map_id| upload_material_map(ctx, &mesh_maps[*map_id as usize])),
+            )
+            .await;
+
+            for (i, m) in maps.into_iter().enumerate() {
+                res.maps[i] = m;
+            }
+
+            res
         }
-        materials.push(m);
-    }*/
-    unimplemented!();   // TODO
+    }))
+    .await;
 
     Ok(shader_uniforms!(
         mesh_vertex_buf: upload_array_buffer(verts),

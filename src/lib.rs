@@ -447,7 +447,7 @@ impl Rendertoy {
 
         let tex = callback(&state);
 
-        let snapshot = get_snapshot();        
+        let snapshot = get_snapshot();
         let final_texture = snapshot.get(tex).await;
         let final_texture = &*final_texture;
 
@@ -646,16 +646,18 @@ impl Rendertoy {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let vg_context = nanovg::ContextBuilder::new()
-            .stencil_strokes()
-            .build()
-            .expect("Initialization of NanoVG failed!");
+                .stencil_strokes()
+                .build()
+                .expect("Initialization of NanoVG failed!");
 
             dbg!();
 
             let mut font = None;
             {
                 let snapshot = get_snapshot();
-                let blob = &*snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf"))).await;
+                let blob = &*snapshot
+                    .get(load_blob(asset!("fonts/Roboto-Regular.ttf")))
+                    .await;
 
                 font = Some(
                     Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())

@@ -10,7 +10,7 @@ use snoozy::*;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::pin::Pin;
-use std::sync::{Arc};
+use std::sync::Arc;
 
 macro_rules! def_shader_uniform_types {
     (@resolved_type SnoozyRef<$t:ty>) => {
@@ -36,7 +36,7 @@ macro_rules! def_shader_uniform_types {
 		}
 
         impl ShaderUniformValue {
-            pub async fn resolve(&self, ctx: &mut Context) -> Result<ResolvedShaderUniformValue<'_>> {
+            pub async fn resolve(&self, ctx: &Context) -> Result<ResolvedShaderUniformValue<'_>> {
                 match self {
                     $(ShaderUniformValue::$name(v) => Ok(ResolvedShaderUniformValue::$name(
                         def_shader_uniform_types!(@resolve ctx $($type)*, v)
@@ -190,7 +190,7 @@ impl Drop for ComputeShader {
 }
 
 struct ShaderIncludeProvider<'a> {
-    ctx: &'a mut Context,
+    ctx: &'a Context,
 }
 
 impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider<'a> {
@@ -226,7 +226,8 @@ impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider<'a> {
         };
 
         RelativePath::new(path);
-        let blob = snoozy::futures::executor::block_on(self.ctx.get(&load_blob(asset_path.clone())))?;
+        let blob =
+            snoozy::futures::executor::block_on(self.ctx.get(&load_blob(asset_path.clone())))?;
         String::from_utf8(blob.contents.clone())
             .map_err(|e| format_err!("{}", e))
             .map(|ok| (ok, asset_path))
@@ -234,7 +235,7 @@ impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider<'a> {
 }
 
 #[snoozy]
-pub async fn load_cs(ctx: &mut Context, path: &AssetPath) -> Result<ComputeShader> {
+pub async fn load_cs(ctx: &Context, path: &AssetPath) -> Result<ComputeShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
         &mut ShaderIncludeProvider { ctx: ctx },
@@ -262,7 +263,7 @@ pub async fn load_cs(ctx: &mut Context, path: &AssetPath) -> Result<ComputeShade
 
 #[snoozy]
 pub async fn load_cs_from_string(
-    _ctx: &mut Context,
+    _ctx: &Context,
     source: &String,
     name: &String,
 ) -> Result<ComputeShader> {
@@ -296,7 +297,7 @@ impl Drop for RasterSubShader {
 }
 
 #[snoozy]
-pub async fn load_vs(ctx: &mut Context, path: &AssetPath) -> Result<RasterSubShader> {
+pub async fn load_vs(ctx: &Context, path: &AssetPath) -> Result<RasterSubShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
         &mut ShaderIncludeProvider { ctx: ctx },
@@ -312,7 +313,7 @@ pub async fn load_vs(ctx: &mut Context, path: &AssetPath) -> Result<RasterSubSha
 }
 
 #[snoozy]
-pub async fn load_ps(ctx: &mut Context, path: &AssetPath) -> Result<RasterSubShader> {
+pub async fn load_ps(ctx: &Context, path: &AssetPath) -> Result<RasterSubShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
         &mut ShaderIncludeProvider { ctx: ctx },
@@ -334,7 +335,7 @@ pub struct RasterPipeline {
 
 #[snoozy]
 pub async fn make_raster_pipeline(
-    ctx: &mut Context,
+    ctx: &Context,
     shaders_in: &Vec<SnoozyRef<RasterSubShader>>,
 ) -> Result<RasterPipeline> {
     let mut shaders = Vec::with_capacity(shaders_in.len());
@@ -358,17 +359,25 @@ struct ShaderUniformPlumber {
 }
 
 pub enum PlumberEvent<'a, 'b, 'c> {
-    SetUniform{name: &'a str, value: &'b ResolvedShaderUniformValue<'c>},
+    SetUniform {
+        name: &'a str,
+        value: &'b ResolvedShaderUniformValue<'c>,
+    },
     EnterScope,
     LeaveScope,
 }
 
 pub trait ShaderUniformPlumberCallback {
-    fn plumb(&mut self, ctx: &mut Context, name: &str, value: &ResolvedShaderUniformValue) -> Result<()>;
+    fn plumb(
+        &mut self,
+        ctx: &Context,
+        name: &str,
+        value: &ResolvedShaderUniformValue,
+    ) -> Result<()>;
 }
 
 impl ShaderUniformPlumber {
-    async fn prepare(&self, ctx: &mut Context, uniforms: &Vec<ShaderUniformHolder>) -> Result<()> {
+    async fn prepare(&self, ctx: &Context, uniforms: &Vec<ShaderUniformHolder>) -> Result<()> {
         // Eval input parameters
         for uniform in uniforms.iter() {
             // TODO: bundles
@@ -408,7 +417,7 @@ impl ShaderUniformPlumber {
 
     fn plumb_uniform(
         &mut self,
-        ctx: &mut Context,
+        ctx: &Context,
         program_handle: u32,
         reflection: &ShaderReflection,
         name: &str,
@@ -583,7 +592,7 @@ impl ShaderUniformPlumber {
 
     async fn plumb<UniformHandlerFn>(
         &mut self,
-        ctx: &mut Context,
+        ctx: &Context,
         program_handle: u32,
         reflection: &ShaderReflection,
         uniforms: &Vec<ShaderUniformHolder>,
@@ -591,10 +600,15 @@ impl ShaderUniformPlumber {
     ) -> Result<()>
     where
         UniformHandlerFn:
-            FnMut(&mut Context, &mut dyn ShaderUniformPlumberCallback, PlumberEvent) -> Result<()>,
+            FnMut(&Context, &mut dyn ShaderUniformPlumberCallback, PlumberEvent) -> Result<()>,
     {
         impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32, &ShaderReflection) {
-            fn plumb(&mut self, ctx: &mut Context, name: &str, value: &ResolvedShaderUniformValue) -> Result<()> {
+            fn plumb(
+                &mut self,
+                ctx: &Context,
+                name: &str,
+                value: &ResolvedShaderUniformValue,
+            ) -> Result<()> {
                 self.0.plumb_uniform(ctx, self.1, self.2, name, value)
             }
         }
@@ -619,7 +633,10 @@ impl ShaderUniformPlumber {
                     let _ = uniform_handler_fn(
                         ctx,
                         &mut (&mut *self, program_handle, reflection),
-                        PlumberEvent::SetUniform{name: &uniform.name, value: &value},
+                        PlumberEvent::SetUniform {
+                            name: &uniform.name,
+                            value: &value,
+                        },
                     )?;
                 }
             }
@@ -651,7 +668,7 @@ impl ShaderUniformPlumber {
 
 #[snoozy]
 pub async fn compute_tex(
-    ctx: &mut Context,
+    ctx: &Context,
     key: &TextureKey,
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
@@ -669,19 +686,21 @@ pub async fn compute_tex(
             gl::UseProgram(cs.handle);
         }
 
-        uniform_plumber.plumb(
-            ctx,
-            cs.handle,
-            &cs.reflection,
-            uniforms,
-            &mut |ctx, plumber, event| {
-                if let PlumberEvent::SetUniform{ value, name } = event {
-                    plumber.plumb(ctx, name, value)
-                } else {
-                    Ok(())
-                }
-            },
-        ).await?;
+        uniform_plumber
+            .plumb(
+                ctx,
+                cs.handle,
+                &cs.reflection,
+                uniforms,
+                &mut |ctx, plumber, event| {
+                    if let PlumberEvent::SetUniform { value, name } = event {
+                        plumber.plumb(ctx, name, value)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .await?;
         uniform_plumber.img_unit
     };
 
@@ -746,7 +765,7 @@ pub async fn compute_tex(
 
 #[snoozy]
 pub async fn raster_tex(
-    ctx: &mut Context,
+    ctx: &Context,
     key: &TextureKey,
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,
@@ -820,53 +839,55 @@ pub async fn raster_tex(
 
         let mut mesh_stack = vec![MeshDrawData::default()];
 
-        uniform_plumber.plumb(
-            ctx,
-            raster_pipe.handle,
-            &raster_pipe.reflection,
-            uniforms,
-            &mut |ctx, plumber, event| match event {
-                PlumberEvent::SetUniform{name, value} => {
-                    match value {
-                        ResolvedShaderUniformValue::BufferAsset(buf)
-                            if name == "mesh_index_buf" =>
-                        {
-                            mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer_id);
+        uniform_plumber
+            .plumb(
+                ctx,
+                raster_pipe.handle,
+                &raster_pipe.reflection,
+                uniforms,
+                &mut |ctx, plumber, event| match event {
+                    PlumberEvent::SetUniform { name, value } => {
+                        match value {
+                            ResolvedShaderUniformValue::BufferAsset(buf)
+                                if name == "mesh_index_buf" =>
+                            {
+                                mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer_id);
+                            }
+                            ResolvedShaderUniformValue::Uint32(value)
+                                if name == "mesh_index_count" =>
+                            {
+                                mesh_stack.last_mut().unwrap().index_count = Some(**value);
+                            }
+                            _ => {}
                         }
-                        ResolvedShaderUniformValue::Uint32(value)
-                            if name == "mesh_index_count" =>
-                        {
-                            mesh_stack.last_mut().unwrap().index_count = Some(**value);
-                        }
-                        _ => {}
-                    }
 
-                    plumber.plumb(ctx, name, value)
-                }
-                PlumberEvent::EnterScope => {
-                    mesh_stack.push(Default::default());
-                    Ok(())
-                }
-                PlumberEvent::LeaveScope => {
-                    let mesh = mesh_stack.pop().unwrap();
-                    if let Some(index_count) = mesh.index_count {
-                        if let Some(index_buffer) = mesh.index_buffer {
-                            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
-                            gl::DrawElements(
-                                gl::TRIANGLES,
-                                index_count as i32,
-                                gl::UNSIGNED_INT,
-                                std::ptr::null(),
-                            );
-                            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-                        } else {
-                            gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
-                        }
+                        plumber.plumb(ctx, name, value)
                     }
-                    Ok(())
-                }
-            },
-        ).await?;
+                    PlumberEvent::EnterScope => {
+                        mesh_stack.push(Default::default());
+                        Ok(())
+                    }
+                    PlumberEvent::LeaveScope => {
+                        let mesh = mesh_stack.pop().unwrap();
+                        if let Some(index_count) = mesh.index_count {
+                            if let Some(index_buffer) = mesh.index_buffer {
+                                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
+                                gl::DrawElements(
+                                    gl::TRIANGLES,
+                                    index_count as i32,
+                                    gl::UNSIGNED_INT,
+                                    std::ptr::null(),
+                                );
+                                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+                            } else {
+                                gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
+                            }
+                        }
+                        Ok(())
+                    }
+                },
+            )
+            .await?;
 
         gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
         gl::DeleteFramebuffers(1, &fb_handle);
