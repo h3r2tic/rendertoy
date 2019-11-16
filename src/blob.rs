@@ -9,9 +9,9 @@ pub struct Blob {
 }
 
 #[snoozy]
-pub fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
+pub async fn load_blob(ctx: &mut Context, path: &AssetPath) -> Result<Blob> {
     let mut buffer = Vec::new();
-    let file_path = path.to_path_lossy(ctx)?;
+    let file_path = path.to_path_lossy(ctx).await?;
 
     println!("Loading {}\n    -> {}", path, file_path);
 
@@ -28,9 +28,9 @@ pub struct AssetPath {
 }
 
 impl AssetPath {
-    pub fn to_path_lossy(&self, ctx: &mut Context) -> Result<String> {
+    pub async fn to_path_lossy(&self, ctx: &mut Context) -> Result<String> {
         let mut file_path: PathBuf = (*ctx
-            .get(get_cargo_package_dep_path(self.crate_name.clone()))?)
+            .get(get_cargo_package_dep_path(self.crate_name.clone())).await?)
         .0
         .clone()
         .into();

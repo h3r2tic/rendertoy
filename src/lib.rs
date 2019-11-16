@@ -1,4 +1,5 @@
 #![feature(core_intrinsics)]
+#![feature(async_closure)]
 
 mod backend;
 mod blob;
@@ -21,6 +22,8 @@ pub mod compute_tex_macro;
 pub use gl;
 pub use nalgebra as na;
 pub use snoozy::*;
+use tokio::prelude::*;
+use tokio::runtime::Runtime;
 
 pub use self::blob::*;
 pub use self::buffer::*;
@@ -407,7 +410,7 @@ impl Rendertoy {
             .or(self.locked_debug_name.as_ref())
     }
 
-    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
+    async fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
@@ -444,27 +447,27 @@ impl Rendertoy {
 
         let tex = callback(&state);
 
-        with_snapshot(|snapshot| {
-            let final_texture = &*snapshot.get(tex);
+        let snapshot = get_snapshot();        
+        let final_texture = snapshot.get(tex).await;
+        let final_texture = &*final_texture;
 
-            let mut debugged_texture: Option<u32> = None;
-            gpu_debugger::with_textures(|data| {
-                /*debugged_texture = self
-                .selected_debug_name
-                .as_ref()
-                .or(self.locked_debug_name.as_ref())
-                .and_then(|name| data.textures.get(name).cloned());*/
-                debugged_texture = self
-                    .get_currently_debugged_texture()
-                    .and_then(|name| data.textures.get(name).cloned());
-            });
-
-            //draw_fullscreen_texture(final_texture, state.window_size_pixels);
-            backend::draw::draw_fullscreen_texture(
-                debugged_texture.unwrap_or(final_texture.texture_id),
-                state.window_size_pixels,
-            );
+        let mut debugged_texture: Option<u32> = None;
+        gpu_debugger::with_textures(|data| {
+            /*debugged_texture = self
+            .selected_debug_name
+            .as_ref()
+            .or(self.locked_debug_name.as_ref())
+            .and_then(|name| data.textures.get(name).cloned());*/
+            debugged_texture = self
+                .get_currently_debugged_texture()
+                .and_then(|name| data.textures.get(name).cloned());
         });
+
+        //draw_fullscreen_texture(final_texture, state.window_size_pixels);
+        backend::draw::draw_fullscreen_texture(
+            debugged_texture.unwrap_or(final_texture.texture_id),
+            state.window_size_pixels,
+        );
     }
 
     fn draw_profiling_stats(
@@ -636,48 +639,57 @@ impl Rendertoy {
         );
     }
 
-    pub fn draw_forever<F>(&mut self, mut callback: F)
+    pub fn draw_forever<F>(mut self, mut callback: F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        let vg_context = nanovg::ContextBuilder::new()
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let vg_context = nanovg::ContextBuilder::new()
             .stencil_strokes()
             .build()
             .expect("Initialization of NanoVG failed!");
 
-        let mut font = None;
-        with_snapshot(|snapshot| {
-            let blob = &*snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf")));
+            dbg!();
 
-            font = Some(
-                Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
-                    .expect("Failed to load font 'Roboto-Regular.ttf'"),
-            );
+            let mut font = None;
+            {
+                let snapshot = get_snapshot();
+                let blob = &*snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf"))).await;
+
+                font = Some(
+                    Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
+                        .expect("Failed to load font 'Roboto-Regular.ttf'"),
+                );
+            }
+
+            dbg!();
+
+            let font = font.expect("Failed to load font");
+
+            let mut running = true;
+            while running {
+                unsafe {
+                    gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
+                    gl::BindVertexArray(self.gl_state.vao);
+                    gl::Enable(gl::CULL_FACE);
+                    gl::Disable(gl::STENCIL_TEST);
+                    gl::Disable(gl::BLEND);
+                }
+
+                self.draw_with_frame_snapshot(&mut callback).await;
+
+                gpu_profiler::end_frame();
+                gpu_debugger::end_frame();
+
+                if self.show_gui && !self.cfg.core_gl {
+                    self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
+                    self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
+                }
+
+                running = self.next_frame();
+            }
         });
-
-        let font = font.expect("Failed to load font");
-
-        let mut running = true;
-        while running {
-            unsafe {
-                gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
-                gl::BindVertexArray(self.gl_state.vao);
-                gl::Enable(gl::CULL_FACE);
-                gl::Disable(gl::STENCIL_TEST);
-                gl::Disable(gl::BLEND);
-            }
-
-            self.draw_with_frame_snapshot(&mut callback);
-            gpu_profiler::end_frame();
-            gpu_debugger::end_frame();
-
-            if self.show_gui && !self.cfg.core_gl {
-                self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
-                self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
-            }
-
-            running = self.next_frame();
-        }
     }
 }
 

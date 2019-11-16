@@ -115,8 +115,8 @@ fn load_gltf_material(
 }
 
 #[snoozy]
-pub fn load_gltf_scene(ctx: &mut Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
-    let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx)?)?;
+pub async fn load_gltf_scene(ctx: &mut Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
+    let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx).await?)?;
 
     if let Some(scene) = gltf.default_scene() {
         let mut res: TriangleMesh = TriangleMesh::default();
@@ -259,11 +259,11 @@ pub struct RasterGpuMesh {
 }
 
 #[snoozy]
-pub fn make_raster_mesh(
+pub async fn make_raster_mesh(
     ctx: &mut Context,
     mesh: &SnoozyRef<TriangleMesh>,
 ) -> Result<RasterGpuMesh> {
-    let mesh = ctx.get(mesh)?;
+    let mesh = ctx.get(mesh).await?;
 
     let mut verts: Vec<RasterGpuVertex> = Vec::with_capacity(mesh.positions.len());
 
@@ -304,7 +304,7 @@ impl Default for GpuMaterial {
     }
 }
 
-fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
+async fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
     let tex = match *map {
         MeshMaterialMap::Asset {
             ref path,
@@ -313,7 +313,7 @@ fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
         MeshMaterialMap::Placeholder(ref texel_value) => make_placeholder_rgba8_tex(*texel_value),
     };
 
-    if let Ok(tex) = ctx.get(tex) {
+    if let Ok(tex) = ctx.get(tex).await {
         tex.bindless_handle
     } else {
         0u64
@@ -321,11 +321,11 @@ fn upload_material_map(ctx: &mut Context, map: &MeshMaterialMap) -> u64 {
 }
 
 #[snoozy]
-pub fn upload_raster_mesh(
+pub async fn upload_raster_mesh(
     ctx: &mut Context,
     mesh: &SnoozyRef<RasterGpuMesh>,
 ) -> Result<ShaderUniformBundle> {
-    let mesh = ctx.get(mesh)?;
+    let mesh = ctx.get(mesh).await?;
 
     let verts = ArcView::new(&mesh, |m| &m.verts);
     let uvs = ArcView::new(&mesh, |m| &m.uvs);
@@ -334,18 +334,16 @@ pub fn upload_raster_mesh(
     let indices = ArcView::new(&mesh, |m| &m.indices);
     let material_ids = ArcView::new(&mesh, |m| &m.material_ids);
 
-    let materials = mesh
-        .materials
-        .iter()
-        .map(|m| {
-            let mut res = GpuMaterial::default();
-            res.base_color_mult = m.base_color_mult;
-            for (i, map_id) in m.maps.iter().enumerate() {
-                res.maps[i] = upload_material_map(ctx, &mesh.maps[*map_id as usize]);
-            }
-            res
-        })
-        .collect::<Vec<_>>();
+    let materials: Vec<MeshMaterial> = Vec::with_capacity(mesh.materials.len());
+    /*for m in mesh.materials.iter() {
+        let mut res = GpuMaterial::default();
+        res.base_color_mult = m.base_color_mult;
+        for (i, map_id) in m.maps.iter().enumerate() {
+            res.maps[i] = upload_material_map(ctx, &mesh.maps[*map_id as usize]).await;
+        }
+        materials.push(m);
+    }*/
+    unimplemented!();   // TODO
 
     Ok(shader_uniforms!(
         mesh_vertex_buf: upload_array_buffer(verts),

@@ -17,13 +17,13 @@ pub struct TexParams {
 }
 
 #[snoozy]
-pub fn load_tex(ctx: &mut Context, path: &AssetPath) -> Result<Texture> {
+pub async fn load_tex(ctx: &mut Context, path: &AssetPath) -> Result<Texture> {
     let tex = ctx.get(load_tex_with_params(
         path.clone(),
         TexParams {
             gamma: TexGamma::Srgb,
         },
-    ))?;
+    )).await?;
     Ok((*tex).clone())
 }
 
@@ -129,12 +129,12 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
 }
 
 #[snoozy]
-pub fn load_tex_with_params(
+pub async fn load_tex_with_params(
     ctx: &mut Context,
     path: &AssetPath,
     params: &TexParams,
 ) -> Result<Texture> {
-    let blob = ctx.get(&load_blob(path.clone()))?;
+    let blob = ctx.get(&load_blob(path.clone())).await?;
 
     if path.asset_name.ends_with(".hdr") {
         load_hdr_tex(&*blob, params)
@@ -144,7 +144,7 @@ pub fn load_tex_with_params(
 }
 
 #[snoozy]
-pub fn make_placeholder_rgba8_tex(_ctx: &mut Context, texel_value: &[u8; 4]) -> Result<Texture> {
+pub async fn make_placeholder_rgba8_tex(_ctx: &mut Context, texel_value: &[u8; 4]) -> Result<Texture> {
     let res = backend::texture::create_texture(TextureKey {
         width: 1,
         height: 1,

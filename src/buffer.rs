@@ -31,7 +31,7 @@ fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
 }
 
 #[snoozy]
-pub fn upload_buffer<T: Copy + Send + Sync + 'static>(
+pub async fn upload_buffer<T: Copy + Send + Sync + 'static>(
     ctx: &mut Context,
     contents: &T,
 ) -> Result<Buffer> {
@@ -116,7 +116,7 @@ pub fn upload_array_buffer_impl<
 }
 
 #[snoozy]
-pub fn upload_array_buffer<
+pub async fn upload_array_buffer<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
@@ -127,7 +127,7 @@ pub fn upload_array_buffer<
 }
 
 #[snoozy]
-pub fn upload_array_tex_buffer<
+pub async fn upload_array_tex_buffer<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
