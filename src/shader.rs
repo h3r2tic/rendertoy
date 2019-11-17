@@ -25,13 +25,13 @@ macro_rules! def_shader_uniform_types {
         $t
     };
     (@resolve $ctx:ident SnoozyRef<ShaderUniformBundle>, $v:ident) => {
-        resolve($ctx, &*$ctx.get($v).await?).await?
+        resolve($ctx.clone(), (*$ctx.get($v).await?).clone()).await?
     };
     (@resolve $ctx:ident SnoozyRef<$t:ty>, $v:ident) => {
         (*$ctx.get($v).await?).clone()
     };
     (@resolve $ctx:ident ShaderUniformBundle, $v:ident) => {
-        resolve($ctx, $v).await?
+        resolve($ctx.clone(), $v.clone()).await?
     };
     (@resolve $ctx:ident $t:ty, $v:ident) => {
         (*$v).clone()
@@ -47,7 +47,7 @@ macro_rules! def_shader_uniform_types {
 		}
 
         impl ShaderUniformValue {
-            pub fn resolve<'a, 'b: 'a>(&'a self, ctx: &'b Context) -> BoxFuture<'a, Result<ResolvedShaderUniformValue>> {
+            pub fn resolve<'a>(&'a self, ctx: Context) -> BoxFuture<'a, Result<ResolvedShaderUniformValue>> {
                 async move {
                     match self {
                         $(ShaderUniformValue::$name(v) => Ok(ResolvedShaderUniformValue::$name(
@@ -108,10 +108,10 @@ impl ShaderUniformHolder {
         }
     }
 
-    pub async fn resolve(&self, ctx: &Context) -> Result<ResolvedShaderUniformHolder> {
+    pub async fn resolve(&self, ctx: Context) -> Result<ResolvedShaderUniformHolder> {
         Ok(ResolvedShaderUniformHolder {
             name: self.name.clone(),
-            value: self.value.resolve(ctx).await?,
+            value: self.value.resolve(ctx.clone()).await?,
         })
     }
 }
@@ -120,10 +120,20 @@ pub type ShaderUniformBundle = Vec<ShaderUniformHolder>;
 pub type ResolvedShaderUniformBundle = Vec<ResolvedShaderUniformHolder>;
 
 async fn resolve(
-    ctx: &Context,
-    uniforms: &Vec<ShaderUniformHolder>,
+    ctx: Context,
+    uniforms: Vec<ShaderUniformHolder>,
 ) -> Result<Vec<ResolvedShaderUniformHolder>> {
-    try_join_all(uniforms.iter().map(|u| u.resolve(ctx))).await
+    // TODO: don't clone all the things.
+    //
+    try_join_all(uniforms.into_iter().map(|u| {
+        let ctx = ctx.clone();
+        tokio::executor::Executor::spawn_with_handle(
+            &mut tokio::executor::DefaultExecutor::current(),
+            async move { u.resolve(ctx).await },
+        )
+        .expect("failed to spawn_with_handle()")
+    }))
+    .await
 }
 
 #[macro_export]
@@ -219,11 +229,11 @@ impl Drop for ComputeShader {
     }
 }
 
-struct ShaderIncludeProvider<'a> {
-    ctx: &'a Context,
+struct ShaderIncludeProvider {
+    ctx: Context,
 }
 
-impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider<'a> {
+impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider {
     type IncludeContext = AssetPath;
 
     fn get_include(
@@ -265,10 +275,10 @@ impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider<'a> {
 }
 
 #[snoozy]
-pub async fn load_cs(ctx: &Context, path: &AssetPath) -> Result<ComputeShader> {
+pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
-        &mut ShaderIncludeProvider { ctx: ctx },
+        &mut ShaderIncludeProvider { ctx: ctx.clone() },
         AssetPath {
             crate_name: path.crate_name.clone(),
             asset_name: String::new(),
@@ -293,7 +303,7 @@ pub async fn load_cs(ctx: &Context, path: &AssetPath) -> Result<ComputeShader> {
 
 #[snoozy]
 pub async fn load_cs_from_string(
-    _ctx: &Context,
+    _ctx: Context,
     source: &String,
     name: &String,
 ) -> Result<ComputeShader> {
@@ -327,10 +337,10 @@ impl Drop for RasterSubShader {
 }
 
 #[snoozy]
-pub async fn load_vs(ctx: &Context, path: &AssetPath) -> Result<RasterSubShader> {
+pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
-        &mut ShaderIncludeProvider { ctx: ctx },
+        &mut ShaderIncludeProvider { ctx: ctx.clone() },
         AssetPath {
             crate_name: path.crate_name.clone(),
             asset_name: String::new(),
@@ -343,10 +353,10 @@ pub async fn load_vs(ctx: &Context, path: &AssetPath) -> Result<RasterSubShader>
 }
 
 #[snoozy]
-pub async fn load_ps(ctx: &Context, path: &AssetPath) -> Result<RasterSubShader> {
+pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
-        &mut ShaderIncludeProvider { ctx: ctx },
+        &mut ShaderIncludeProvider { ctx: ctx.clone() },
         AssetPath {
             crate_name: path.crate_name.clone(),
             asset_name: String::new(),
@@ -365,7 +375,7 @@ pub struct RasterPipeline {
 
 #[snoozy]
 pub async fn make_raster_pipeline(
-    ctx: &Context,
+    ctx: Context,
     shaders_in: &Vec<SnoozyRef<RasterSubShader>>,
 ) -> Result<RasterPipeline> {
     let mut shaders = Vec::with_capacity(shaders_in.len());
@@ -629,7 +639,7 @@ impl ShaderUniformPlumber {
 
 #[snoozy]
 pub async fn compute_tex(
-    ctx: &Context,
+    ctx: Context,
     key: &TextureKey,
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
@@ -641,7 +651,7 @@ pub async fn compute_tex(
     let cs = ctx.get(cs).await?;
 
     let mut img_unit = {
-        let uniforms = resolve(ctx, uniforms).await?;
+        let uniforms = resolve(ctx, uniforms.clone()).await?;
 
         unsafe {
             gl::UseProgram(cs.handle);
@@ -721,7 +731,7 @@ pub async fn compute_tex(
 
 #[snoozy]
 pub async fn raster_tex(
-    ctx: &Context,
+    ctx: Context,
     key: &TextureKey,
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,
@@ -734,7 +744,7 @@ pub async fn raster_tex(
     });
 
     let mut uniform_plumber = ShaderUniformPlumber::default();
-    let uniforms = resolve(ctx, uniforms).await?;
+    let uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
 
     let raster_pipe = ctx.get(raster_pipe).await?;
     let mut img_unit = 0;

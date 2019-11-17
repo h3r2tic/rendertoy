@@ -116,7 +116,7 @@ fn load_gltf_material(
 }
 
 #[snoozy]
-pub async fn load_gltf_scene(ctx: &Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
+pub async fn load_gltf_scene(ctx: Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
     let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx).await?)?;
 
     if let Some(scene) = gltf.default_scene() {
@@ -261,7 +261,7 @@ pub struct RasterGpuMesh {
 
 #[snoozy]
 pub async fn make_raster_mesh(
-    ctx: &Context,
+    ctx: Context,
     mesh: &SnoozyRef<TriangleMesh>,
 ) -> Result<RasterGpuMesh> {
     let mesh = ctx.get(mesh).await?;
@@ -305,8 +305,8 @@ impl Default for GpuMaterial {
     }
 }
 
-async fn upload_material_map(ctx: &Context, map: &MeshMaterialMap) -> u64 {
-    let tex = match *map {
+async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u64 {
+    let tex = match map {
         MeshMaterialMap::Asset {
             ref path,
             ref params,
@@ -323,7 +323,7 @@ async fn upload_material_map(ctx: &Context, map: &MeshMaterialMap) -> u64 {
 
 #[snoozy]
 pub async fn upload_raster_mesh(
-    ctx: &Context,
+    ctx: Context,
     mesh: &SnoozyRef<RasterGpuMesh>,
 ) -> Result<ShaderUniformBundle> {
     let mesh = ctx.get(mesh).await?;
@@ -335,27 +335,41 @@ pub async fn upload_raster_mesh(
     let indices = ArcView::new(&mesh, |m| &m.indices);
     let material_ids = ArcView::new(&mesh, |m| &m.material_ids);
 
-    let mesh_materials = &mesh.clone().materials;
-    let mesh_maps = &mesh.clone().maps;
+    // TODO: don't clone all the things
+    let (mesh_materials, mesh_maps) = {
+        let mesh_clone = (*mesh).clone();
+        (mesh_clone.materials, mesh_clone.maps)
+    };
 
-    let materials = join_all(mesh_materials.iter().cloned().map(|m| {
-        async move {
-            let mut res = GpuMaterial::default();
-            res.base_color_mult = m.base_color_mult;
+    let materials = join_all(mesh_materials.into_iter().map(|m| {
+        let ctx = ctx.clone();
 
-            let maps = join_all(
-                m.maps
-                    .iter()
-                    .map(|map_id| upload_material_map(ctx, &mesh_maps[*map_id as usize])),
-            )
-            .await;
+        // TODO: don't clone all the things
+        let mesh_maps = mesh_maps.clone();
+        tokio::executor::Executor::spawn_with_handle(
+            &mut tokio::executor::DefaultExecutor::current(),
+            async move {
+                let mut res = GpuMaterial::default();
+                res.base_color_mult = m.base_color_mult;
 
-            for (i, m) in maps.into_iter().enumerate() {
-                res.maps[i] = m;
-            }
+                let maps = join_all(m.maps.iter().map(|map_id| {
+                    tokio::executor::Executor::spawn_with_handle(
+                        &mut tokio::executor::DefaultExecutor::current(),
+                        // TODO: don't clone all the things
+                        upload_material_map(ctx.clone(), mesh_maps[*map_id as usize].clone()),
+                    )
+                    .expect("failed to spawn_with_handle()")
+                }))
+                .await;
 
-            res
-        }
+                for (i, m) in maps.into_iter().enumerate() {
+                    res.maps[i] = m;
+                }
+
+                res
+            },
+        )
+        .expect("failed to spawn_with_handle()")
     }))
     .await;
 

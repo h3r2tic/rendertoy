@@ -409,7 +409,7 @@ impl Rendertoy {
             .or(self.locked_debug_name.as_ref())
     }
 
-    async fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
+    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
@@ -446,9 +446,12 @@ impl Rendertoy {
 
         let tex = callback(&state);
 
-        let snapshot = get_snapshot();
-        let final_texture = snapshot.get(tex).await;
-        let final_texture = &*final_texture;
+        let rt = Runtime::new().unwrap();
+        let final_texture = rt.block_on(async move {
+            let snapshot = get_snapshot();
+            let final_texture: Texture = (*snapshot.get(tex).await).clone();
+            final_texture
+        });
 
         let mut debugged_texture: Option<u32> = None;
         gpu_debugger::with_textures(|data| {
@@ -642,55 +645,47 @@ impl Rendertoy {
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let vg_context = nanovg::ContextBuilder::new()
-                .stencil_strokes()
-                .build()
-                .expect("Initialization of NanoVG failed!");
+        let vg_context = nanovg::ContextBuilder::new()
+            .stencil_strokes()
+            .build()
+            .expect("Initialization of NanoVG failed!");
 
-            dbg!();
+        let font;
+        {
+            let snapshot = get_snapshot();
+            let rt = Runtime::new().unwrap();
+            let blob = &*rt.block_on(snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf"))));
 
-            let font;
-            {
-                let snapshot = get_snapshot();
-                let blob = &*snapshot
-                    .get(load_blob(asset!("fonts/Roboto-Regular.ttf")))
-                    .await;
+            font = Some(
+                Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
+                    .expect("Failed to load font 'Roboto-Regular.ttf'"),
+            );
+        }
 
-                font = Some(
-                    Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
-                        .expect("Failed to load font 'Roboto-Regular.ttf'"),
-                );
+        let font = font.expect("Failed to load font");
+
+        let mut running = true;
+        while running {
+            unsafe {
+                gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
+                gl::BindVertexArray(self.gl_state.vao);
+                gl::Enable(gl::CULL_FACE);
+                gl::Disable(gl::STENCIL_TEST);
+                gl::Disable(gl::BLEND);
             }
 
-            dbg!();
+            self.draw_with_frame_snapshot(&mut callback);
 
-            let font = font.expect("Failed to load font");
+            gpu_profiler::end_frame();
+            gpu_debugger::end_frame();
 
-            let mut running = true;
-            while running {
-                unsafe {
-                    gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
-                    gl::BindVertexArray(self.gl_state.vao);
-                    gl::Enable(gl::CULL_FACE);
-                    gl::Disable(gl::STENCIL_TEST);
-                    gl::Disable(gl::BLEND);
-                }
-
-                self.draw_with_frame_snapshot(&mut callback).await;
-
-                gpu_profiler::end_frame();
-                gpu_debugger::end_frame();
-
-                if self.show_gui && !self.cfg.core_gl {
-                    self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
-                    self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
-                }
-
-                running = self.next_frame();
+            if self.show_gui && !self.cfg.core_gl {
+                self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
+                self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
             }
-        });
+
+            running = self.next_frame();
+        }
     }
 }
 

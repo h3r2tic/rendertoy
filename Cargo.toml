@@ -17,7 +17,7 @@ serde_derive = "1.0"
 bincode = "1.2"
 glutin = "0.19"
 gl = { path = "lib/gl" }
-image = "0.22"
+image = { version = "0.22", default-features = false, features = ["gif_codec", "jpeg", "ico", "png_codec", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt"] }
 hdrldr = "0.1.2"
 relative-path = "1.0"
 cargo_metadata = "0.9"

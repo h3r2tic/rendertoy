@@ -6,7 +6,7 @@ use snoozy::*;
 use std::mem::size_of;
 
 fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
-    _ctx: &Context,
+    _ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
     let size_of_t = size_of::<T>();
@@ -32,7 +32,7 @@ fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
 
 #[snoozy]
 pub async fn upload_buffer<T: Copy + Send + Sync + 'static>(
-    ctx: &Context,
+    ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
     upload_buffer_impl(ctx, contents)
@@ -90,7 +90,7 @@ pub fn upload_array_buffer_impl<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    _ctx: &Context,
+    _ctx: Context,
     contents: &C,
     texture_format: Option<u32>,
 ) -> Result<Buffer> {
@@ -120,7 +120,7 @@ pub async fn upload_array_buffer<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    ctx: &Context,
+    ctx: Context,
     contents: &C,
 ) -> Result<Buffer> {
     upload_array_buffer_impl(ctx, contents, None)
@@ -131,7 +131,7 @@ pub async fn upload_array_tex_buffer<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    ctx: &Context,
+    ctx: Context,
     contents: &C,
     texture_format: &u32,
 ) -> Result<Buffer> {
