@@ -1,30 +1,34 @@
 pub use crate::backend::buffer::{Buffer, BufferKey};
 
-use crate::backend;
+use crate::backend::{self, opengl::*};
 
 use snoozy::*;
 use std::mem::size_of;
 
 fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
+    gl: &gl::Gl,
     _ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
     let size_of_t = size_of::<T>();
 
-    let res = backend::buffer::create_buffer(BufferKey {
-        size_bytes: size_of_t,
-        texture_format: None,
-    });
+    let res = backend::buffer::create_buffer(
+        gl,
+        BufferKey {
+            size_bytes: size_of_t,
+            texture_format: None,
+        },
+    );
 
     unsafe {
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-        gl::BufferSubData(
+        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
+        gl.BufferSubData(
             gl::SHADER_STORAGE_BUFFER,
             0,
             size_of_t as isize,
             std::mem::transmute(contents),
         );
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
+        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     }
 
     Ok(res)
@@ -35,7 +39,7 @@ pub async fn upload_buffer<T: Copy + Send + Sync + 'static>(
     ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
-    upload_buffer_impl(ctx, contents)
+    with_gl(|gl| upload_buffer_impl(gl, ctx, contents))
 }
 
 use std::ops::Deref;
@@ -90,26 +94,30 @@ pub fn upload_array_buffer_impl<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
+    gl: &gl::Gl,
     _ctx: Context,
     contents: &C,
     texture_format: Option<u32>,
 ) -> Result<Buffer> {
     let size_of_t = size_of::<T>();
 
-    let res = backend::buffer::create_buffer(BufferKey {
-        size_bytes: contents.len() * size_of_t,
-        texture_format,
-    });
+    let res = backend::buffer::create_buffer(
+        gl,
+        BufferKey {
+            size_bytes: contents.len() * size_of_t,
+            texture_format,
+        },
+    );
 
     unsafe {
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-        gl::BufferSubData(
+        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
+        gl.BufferSubData(
             gl::SHADER_STORAGE_BUFFER,
             0,
             (contents.len() * size_of_t) as isize,
             contents.as_ptr() as *const T as *const std::ffi::c_void,
         );
-        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
+        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     }
 
     Ok(res)
@@ -123,7 +131,7 @@ pub async fn upload_array_buffer<
     ctx: Context,
     contents: &C,
 ) -> Result<Buffer> {
-    upload_array_buffer_impl(ctx, contents, None)
+    with_gl(|gl| upload_array_buffer_impl(gl, ctx, contents, None))
 }
 
 #[snoozy]
@@ -135,7 +143,7 @@ pub async fn upload_array_tex_buffer<
     contents: &C,
     texture_format: &u32,
 ) -> Result<Buffer> {
-    upload_array_buffer_impl(ctx, contents, Some(*texture_format))
+    with_gl(|gl| upload_array_buffer_impl(gl, ctx, contents, Some(*texture_format)))
 }
 
 pub fn to_byte_vec<T>(mut v: Vec<T>) -> Vec<u8>

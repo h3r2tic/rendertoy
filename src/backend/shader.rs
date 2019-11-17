@@ -5,11 +5,12 @@ use std::ffi::CString;
 use std::iter;
 
 pub(crate) fn make_shader(
+    gl: &gl::Gl,
     shader_type: u32,
     sources: &[shader_prepper::SourceChunk],
 ) -> Result<u32> {
     unsafe {
-        let handle = gl::CreateShader(shader_type);
+        let handle = gl.CreateShader(shader_type);
 
         let preamble = shader_prepper::SourceChunk {
             source: "#version 430\n".to_string(),
@@ -35,24 +36,24 @@ pub(crate) fn make_shader(
             source_ptrs.push(s.source.as_ptr() as *const GLchar);
         }
 
-        gl::ShaderSource(
+        gl.ShaderSource(
             handle,
             source_ptrs.len() as i32,
             source_ptrs.as_ptr(),
             source_lengths.as_ptr(),
         );
-        gl::CompileShader(handle);
+        gl.CompileShader(handle);
 
         let mut shader_ok: gl::types::GLint = 1;
-        gl::GetShaderiv(handle, gl::COMPILE_STATUS, &mut shader_ok);
+        gl.GetShaderiv(handle, gl::COMPILE_STATUS, &mut shader_ok);
 
         if shader_ok != 1 {
             let mut log_len: gl::types::GLint = 0;
-            gl::GetShaderiv(handle, gl::INFO_LOG_LENGTH, &mut log_len);
+            gl.GetShaderiv(handle, gl::INFO_LOG_LENGTH, &mut log_len);
 
             let log_str = CString::from_vec_unchecked(vec![b'\0'; (log_len + 1) as usize]);
 
-            gl::GetShaderInfoLog(
+            gl.GetShaderInfoLog(
                 handle,
                 log_len,
                 std::ptr::null_mut(),
@@ -83,7 +84,7 @@ pub(crate) fn make_shader(
             let pretty_log = INTEL_ERROR_RE.replace_all(&log_str, error_replacement);
             let pretty_log = NV_ERROR_RE.replace_all(&pretty_log, error_replacement);
 
-            gl::DeleteShader(handle);
+            gl.DeleteShader(handle);
             Err(format_err!(
                 "Shader failed to compile: {}",
                 pretty_log.to_string()
@@ -94,25 +95,25 @@ pub(crate) fn make_shader(
     }
 }
 
-pub(crate) fn make_program(shaders: &[u32]) -> Result<u32> {
+pub(crate) fn make_program(gl: &gl::Gl, shaders: &[u32]) -> Result<u32> {
     unsafe {
-        let handle = gl::CreateProgram();
+        let handle = gl.CreateProgram();
         for &shader in shaders.iter() {
-            gl::AttachShader(handle, shader);
+            gl.AttachShader(handle, shader);
         }
 
-        gl::LinkProgram(handle);
+        gl.LinkProgram(handle);
 
         let mut program_ok: gl::types::GLint = 1;
-        gl::GetProgramiv(handle, gl::LINK_STATUS, &mut program_ok);
+        gl.GetProgramiv(handle, gl::LINK_STATUS, &mut program_ok);
 
         if program_ok != 1 {
             let mut log_len: gl::types::GLint = 0;
-            gl::GetProgramiv(handle, gl::INFO_LOG_LENGTH, &mut log_len);
+            gl.GetProgramiv(handle, gl::INFO_LOG_LENGTH, &mut log_len);
 
             let log_str = CString::from_vec_unchecked(vec![b'\0'; (log_len + 1) as usize]);
 
-            gl::GetProgramInfoLog(
+            gl.GetProgramInfoLog(
                 handle,
                 log_len,
                 std::ptr::null_mut(),
@@ -121,7 +122,7 @@ pub(crate) fn make_program(shaders: &[u32]) -> Result<u32> {
 
             let log_str = log_str.to_string_lossy().into_owned();
 
-            gl::DeleteProgram(handle);
+            gl.DeleteProgram(handle);
             Err(format_err!("Shader failed to link: {}", log_str))
         } else {
             Ok(handle)

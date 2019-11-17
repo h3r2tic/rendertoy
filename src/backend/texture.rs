@@ -61,8 +61,8 @@ pub struct TextureAllocation {
     bindless_handle: u64,
 }
 
-pub fn create_texture(key: TextureKey) -> Texture {
-    create_transient(key)
+pub fn create_texture(gl: &gl::Gl, key: TextureKey) -> Texture {
+    create_transient(gl, key)
 }
 
 impl TransientResource for Texture {
@@ -82,38 +82,38 @@ impl TransientResource for Texture {
         }
     }
 
-    fn allocate_payload(key: TextureKey) -> TextureAllocation {
+    fn allocate_payload(gl: &gl::Gl, key: TextureKey) -> TextureAllocation {
         unsafe {
             let mut prev_bound_texture = 0;
-            gl::GetIntegerv(gl::TEXTURE_BINDING_2D, &mut prev_bound_texture);
+            gl.GetIntegerv(gl::TEXTURE_BINDING_2D, &mut prev_bound_texture);
 
             let mut texture_id = 0;
-            gl::GenTextures(1, &mut texture_id);
-            gl::BindTexture(gl::TEXTURE_2D, texture_id);
-            gl::TexStorage2D(
+            gl.GenTextures(1, &mut texture_id);
+            gl.BindTexture(gl::TEXTURE_2D, texture_id);
+            gl.TexStorage2D(
                 gl::TEXTURE_2D,
                 1,
                 key.format,
                 key.width as i32,
                 key.height as i32,
             );
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
+            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
+            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
 
             let mut sampler_id = 0;
-            gl::GenSamplers(1, &mut sampler_id);
-            gl::SamplerParameteri(sampler_id, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::SamplerParameteri(sampler_id, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-            gl::SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-            gl::SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
+            gl.GenSamplers(1, &mut sampler_id);
+            gl.SamplerParameteri(sampler_id, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl.SamplerParameteri(sampler_id, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl.SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
+            gl.SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
 
-            let bindless_handle = gl::GetTextureHandleARB(texture_id);
-            gl::MakeTextureHandleResidentARB(bindless_handle);
+            let bindless_handle = gl.GetTextureHandleARB(texture_id);
+            gl.MakeTextureHandleResidentARB(bindless_handle);
 
             // Restore the previously bound texture
-            gl::BindTexture(gl::TEXTURE_2D, prev_bound_texture as u32);
+            gl.BindTexture(gl::TEXTURE_2D, prev_bound_texture as u32);
 
             TextureAllocation {
                 texture_id,

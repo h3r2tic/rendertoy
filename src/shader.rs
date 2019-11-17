@@ -1,4 +1,4 @@
-use crate::backend::{self, render_buffer::*};
+use crate::backend::{self, opengl::*, render_buffer::*};
 use crate::blob::*;
 use crate::buffer::Buffer;
 use crate::gpu_debugger;
@@ -184,10 +184,10 @@ pub struct ShaderReflection {
     uniforms: HashMap<String, ShaderUniformReflection>,
 }
 
-fn reflect_shader(program_handle: u32) -> ShaderReflection {
+fn reflect_shader(gl: &gl::Gl, program_handle: u32) -> ShaderReflection {
     let mut uniform_count = 0i32;
     unsafe {
-        gl::GetProgramiv(program_handle, gl::ACTIVE_UNIFORMS, &mut uniform_count);
+        gl.GetProgramiv(program_handle, gl::ACTIVE_UNIFORMS, &mut uniform_count);
     }
 
     let uniforms: HashMap<String, ShaderUniformReflection> = (0..uniform_count)
@@ -197,7 +197,7 @@ fn reflect_shader(program_handle: u32) -> ShaderReflection {
             let mut gl_size = 0;
 
             let mut name_str: Vec<u8> = vec![b'\0'; 128];
-            gl::GetActiveUniform(
+            gl.GetActiveUniform(
                 program_handle,
                 index as u32,
                 127,
@@ -207,7 +207,7 @@ fn reflect_shader(program_handle: u32) -> ShaderReflection {
                 name_str.as_mut_ptr() as *mut i8,
             );
 
-            let location = gl::GetUniformLocation(program_handle, name_str.as_ptr() as *const i8);
+            let location = gl.GetUniformLocation(program_handle, name_str.as_ptr() as *const i8);
 
             let name = CStr::from_ptr(name_str.as_ptr() as *const i8)
                 .to_string_lossy()
@@ -223,9 +223,10 @@ fn reflect_shader(program_handle: u32) -> ShaderReflection {
 
 impl Drop for ComputeShader {
     fn drop(&mut self) {
-        unsafe {
-            gl::DeleteProgram(self.handle);
-        }
+        // TODO: defer
+        /*unsafe {
+            gl.DeleteProgram(self.handle);
+        }*/
     }
 }
 
@@ -285,19 +286,21 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         },
     )?;
 
-    let handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
-    let name = std::path::Path::new(&path.asset_name)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or("unknown".to_string());
+    with_gl(|gl| {
+        let handle = backend::shader::make_shader(gl, gl::COMPUTE_SHADER, &source)?;
+        let name = std::path::Path::new(&path.asset_name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or("unknown".to_string());
 
-    let handle = backend::shader::make_program(&[handle])?;
-    let reflection = reflect_shader(handle);
+        let handle = backend::shader::make_program(gl, &[handle])?;
+        let reflection = reflect_shader(gl, handle);
 
-    Ok(ComputeShader {
-        handle,
-        name,
-        reflection,
+        Ok(ComputeShader {
+            handle,
+            name,
+            reflection,
+        })
     })
 }
 
@@ -313,14 +316,16 @@ pub async fn load_cs_from_string(
         line_offset: 0,
     }];
 
-    let handle = backend::shader::make_shader(gl::COMPUTE_SHADER, &source)?;
-    let handle = backend::shader::make_program(&[handle])?;
-    let reflection = reflect_shader(handle);
+    with_gl(|gl| {
+        let handle = backend::shader::make_shader(gl, gl::COMPUTE_SHADER, &source)?;
+        let handle = backend::shader::make_program(gl, &[handle])?;
+        let reflection = reflect_shader(gl, handle);
 
-    Ok(ComputeShader {
-        handle,
-        name: name.clone(),
-        reflection,
+        Ok(ComputeShader {
+            handle,
+            name: name.clone(),
+            reflection,
+        })
     })
 }
 
@@ -330,9 +335,10 @@ pub struct RasterSubShader {
 
 impl Drop for RasterSubShader {
     fn drop(&mut self) {
-        unsafe {
-            gl::DeleteShader(self.handle);
-        }
+        // TODO: defer
+        /*unsafe {
+            gl.DeleteShader(self.handle);
+        }*/
     }
 }
 
@@ -347,8 +353,10 @@ pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    Ok(RasterSubShader {
-        handle: backend::shader::make_shader(gl::VERTEX_SHADER, &source)?,
+    with_gl(|gl| {
+        Ok(RasterSubShader {
+            handle: backend::shader::make_shader(gl, gl::VERTEX_SHADER, &source)?,
+        })
     })
 }
 
@@ -363,8 +371,10 @@ pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    Ok(RasterSubShader {
-        handle: backend::shader::make_shader(gl::FRAGMENT_SHADER, &source)?,
+    with_gl(|gl| {
+        Ok(RasterSubShader {
+            handle: backend::shader::make_shader(gl, gl::FRAGMENT_SHADER, &source)?,
+        })
     })
 }
 
@@ -383,10 +393,12 @@ pub async fn make_raster_pipeline(
         shaders.push(ctx.get(&*a).await?.handle);
     }
 
-    let handle = backend::shader::make_program(shaders.as_slice())?;
-    let reflection = reflect_shader(handle);
+    with_gl(|gl| {
+        let handle = backend::shader::make_program(gl, shaders.as_slice())?;
+        let reflection = reflect_shader(gl, handle);
 
-    Ok(RasterPipeline { handle, reflection })
+        Ok(RasterPipeline { handle, reflection })
+    })
 }
 
 #[derive(Default)]
@@ -408,12 +420,13 @@ pub enum PlumberEvent<'a, 'b> {
 }
 
 pub trait ShaderUniformPlumberCallback {
-    fn plumb(&mut self, name: &str, value: &ResolvedShaderUniformValue);
+    fn plumb(&mut self, gl: &gl::Gl, name: &str, value: &ResolvedShaderUniformValue);
 }
 
 impl ShaderUniformPlumber {
     fn plumb_uniform(
         &mut self,
+        gl: &gl::Gl,
         program_handle: u32,
         reflection: &ShaderReflection,
         name: &str,
@@ -446,7 +459,7 @@ impl ShaderUniformPlumber {
             ResolvedShaderUniformValue::TextureAsset(ref tex) => {
                 if let Some(loc) = reflection.uniforms.get(&(name.to_owned() + "_size")) {
                     unsafe {
-                        gl::Uniform4f(
+                        gl.Uniform4f(
                             loc.location,
                             tex.key.width as f32,
                             tex.key.height as f32,
@@ -461,7 +474,7 @@ impl ShaderUniformPlumber {
                         if gl::IMAGE_2D == loc.gl_type {
                             let level = 0;
                             let layered = gl::FALSE;
-                            gl::BindImageTexture(
+                            gl.BindImageTexture(
                                 self.img_unit as u32,
                                 tex.texture_id,
                                 level,
@@ -470,13 +483,13 @@ impl ShaderUniformPlumber {
                                 gl::READ_ONLY,
                                 tex.key.format,
                             );
-                            gl::Uniform1i(loc.location, self.img_unit);
+                            gl.Uniform1i(loc.location, self.img_unit);
                             self.img_unit += 1;
                         } else if gl::SAMPLER_2D == loc.gl_type {
-                            gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
-                            gl::BindTexture(gl::TEXTURE_2D, tex.texture_id);
-                            gl::BindSampler(self.img_unit as u32, tex.sampler_id);
-                            gl::Uniform1i(loc.location, self.img_unit);
+                            gl.ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
+                            gl.BindTexture(gl::TEXTURE_2D, tex.texture_id);
+                            gl.BindSampler(self.img_unit as u32, tex.sampler_id);
+                            gl.Uniform1i(loc.location, self.img_unit);
                             self.img_unit += 1;
                         } else {
                             panic!("unspupported sampler type: {:x}", loc.gl_type);
@@ -486,10 +499,10 @@ impl ShaderUniformPlumber {
             }
             ResolvedShaderUniformValue::BufferAsset(ref buf) => {
                 let u_block_index =
-                    unsafe { gl::GetUniformBlockIndex(program_handle, c_name.as_ptr()) };
+                    unsafe { gl.GetUniformBlockIndex(program_handle, c_name.as_ptr()) };
 
                 let ss_block_index = unsafe {
-                    gl::GetProgramResourceIndex(
+                    gl.GetProgramResourceIndex(
                         program_handle,
                         gl::SHADER_STORAGE_BLOCK,
                         c_name.as_ptr(),
@@ -498,22 +511,18 @@ impl ShaderUniformPlumber {
 
                 if u_block_index != std::u32::MAX {
                     unsafe {
-                        gl::UniformBlockBinding(program_handle, u_block_index, self.ubo_unit);
-                        gl::BindBufferBase(gl::UNIFORM_BUFFER, self.ubo_unit, buf.buffer_id);
+                        gl.UniformBlockBinding(program_handle, u_block_index, self.ubo_unit);
+                        gl.BindBufferBase(gl::UNIFORM_BUFFER, self.ubo_unit, buf.buffer_id);
                     }
                     self.ubo_unit += 1;
                 } else if ss_block_index != std::u32::MAX {
                     unsafe {
-                        gl::ShaderStorageBlockBinding(
+                        gl.ShaderStorageBlockBinding(
                             program_handle,
                             ss_block_index,
                             self.ssbo_unit,
                         );
-                        gl::BindBufferBase(
-                            gl::SHADER_STORAGE_BUFFER,
-                            self.ssbo_unit,
-                            buf.buffer_id,
-                        );
+                        gl.BindBufferBase(gl::SHADER_STORAGE_BUFFER, self.ssbo_unit, buf.buffer_id);
                     }
                     self.ssbo_unit += 1;
                 } else {
@@ -523,14 +532,14 @@ impl ShaderUniformPlumber {
                                 || gl::UNSIGNED_INT_SAMPLER_BUFFER == loc.gl_type
                                 || gl::INT_SAMPLER_BUFFER == loc.gl_type
                             {
-                                gl::ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
-                                gl::BindTexture(
+                                gl.ActiveTexture(gl::TEXTURE0 + self.img_unit as u32);
+                                gl.BindTexture(
                                     gl::TEXTURE_BUFFER,
                                     buf.texture_id
                                         .expect("buffer doesn't have a texture buffer"),
                                 );
-                                gl::BindSampler(self.img_unit as u32, 0);
-                                gl::Uniform1i(loc.location, self.img_unit);
+                                gl.BindSampler(self.img_unit as u32, 0);
+                                gl.Uniform1i(loc.location, self.img_unit);
                                 self.img_unit += 1;
                             } else {
                                 panic!(
@@ -544,12 +553,12 @@ impl ShaderUniformPlumber {
             }
             ResolvedShaderUniformValue::Float32(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1f(loc.location, *value);
+                    gl.Uniform1f(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::Int32(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1i(loc.location, *value);
+                    gl.Uniform1i(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::Uint32(value) => unsafe {
@@ -557,28 +566,28 @@ impl ShaderUniformPlumber {
                     self.index_count = Some(*value);
                 } else {
                     if let Some(loc) = get_uniform!() {
-                        gl::Uniform1ui(loc.location, *value);
+                        gl.Uniform1ui(loc.location, *value);
                     }
                 }
             },
             ResolvedShaderUniformValue::Ivec2(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform2i(loc.location, value.0, value.1);
+                    gl.Uniform2i(loc.location, value.0, value.1);
                 }
             },
             ResolvedShaderUniformValue::Float32Asset(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1f(loc.location, *value);
+                    gl.Uniform1f(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::Uint32Asset(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1ui(loc.location, *value);
+                    gl.Uniform1ui(loc.location, *value);
                 }
             },
             ResolvedShaderUniformValue::UsizeAsset(value) => unsafe {
                 if let Some(loc) = get_uniform!() {
-                    gl::Uniform1i(loc.location, *value as i32);
+                    gl.Uniform1i(loc.location, *value as i32);
                 }
             },
         }
@@ -586,6 +595,7 @@ impl ShaderUniformPlumber {
 
     fn plumb<UniformHandlerFn>(
         &mut self,
+        gl: &gl::Gl,
         program_handle: u32,
         reflection: &ShaderReflection,
         uniforms: &Vec<ResolvedShaderUniformHolder>,
@@ -594,8 +604,8 @@ impl ShaderUniformPlumber {
         UniformHandlerFn: FnMut(&mut dyn ShaderUniformPlumberCallback, PlumberEvent),
     {
         impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32, &ShaderReflection) {
-            fn plumb(&mut self, name: &str, value: &ResolvedShaderUniformValue) {
-                self.0.plumb_uniform(self.1, self.2, name, value)
+            fn plumb(&mut self, gl: &gl::Gl, name: &str, value: &ResolvedShaderUniformValue) {
+                self.0.plumb_uniform(gl, self.1, self.2, name, value)
             }
         }
 
@@ -628,7 +638,7 @@ impl ShaderUniformPlumber {
                 ResolvedShaderUniformValue::Bundle(ref bundle)
                 | ResolvedShaderUniformValue::BundleAsset(ref bundle) => {
                     scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(program_handle, reflection, bundle, uniform_handler_fn);
+                    self.plumb(gl, program_handle, reflection, bundle, uniform_handler_fn);
                     scope_event!(PlumberEvent::LeaveScope);
                 }
                 _ => {}
@@ -644,89 +654,91 @@ pub async fn compute_tex(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let output_tex = backend::texture::create_texture(*key);
+    let cs = ctx.get(cs).await?;
+    let uniforms = resolve(ctx, uniforms.clone()).await?;
 
     let mut uniform_plumber = ShaderUniformPlumber::default();
 
-    let cs = ctx.get(cs).await?;
+    with_gl(|gl| {
+        let output_tex = backend::texture::create_texture(gl, *key);
 
-    let mut img_unit = {
-        let uniforms = resolve(ctx, uniforms.clone()).await?;
+        let mut img_unit = {
+            unsafe {
+                gl.UseProgram(cs.handle);
+            }
+
+            uniform_plumber.plumb(
+                gl,
+                cs.handle,
+                &cs.reflection,
+                &uniforms,
+                &mut |plumber, event| {
+                    if let PlumberEvent::SetUniform { value, name } = event {
+                        plumber.plumb(gl, name, value)
+                    }
+                },
+            );
+            uniform_plumber.img_unit
+        };
+
+        for warning in uniform_plumber.warnings.iter() {
+            crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
+        }
+
+        let dispatch_size = (key.width, key.height);
 
         unsafe {
-            gl::UseProgram(cs.handle);
+            let level = 0;
+            let layered = gl::FALSE;
+            gl.BindImageTexture(
+                img_unit as u32,
+                output_tex.texture_id,
+                level,
+                layered,
+                0,
+                gl::WRITE_ONLY,
+                key.format,
+            );
+            gl.Uniform1i(
+                gl.GetUniformLocation(cs.handle, "outputTex\0".as_ptr() as *const i8),
+                img_unit,
+            );
+            gl.Uniform4f(
+                gl.GetUniformLocation(cs.handle, "outputTex_size\0".as_ptr() as *const i8),
+                dispatch_size.0 as f32,
+                dispatch_size.1 as f32,
+                1f32 / dispatch_size.0 as f32,
+                1f32 / dispatch_size.1 as f32,
+            );
+            img_unit += 1;
+
+            let mut work_group_size: [i32; 3] = [0, 0, 0];
+            gl.GetProgramiv(
+                cs.handle,
+                gl::COMPUTE_WORK_GROUP_SIZE,
+                &mut work_group_size[0],
+            );
+
+            gpu_profiler::profile(gl, &cs.name, || {
+                gl.DispatchCompute(
+                    (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
+                    (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
+                    1,
+                )
+            });
+
+            for i in 0..img_unit {
+                gl.ActiveTexture(gl::TEXTURE0 + i as u32);
+                gl.BindTexture(gl::TEXTURE_2D, 0);
+            }
         }
 
-        uniform_plumber.plumb(
-            cs.handle,
-            &cs.reflection,
-            &uniforms,
-            &mut |plumber, event| {
-                if let PlumberEvent::SetUniform { value, name } = event {
-                    plumber.plumb(name, value)
-                }
-            },
-        );
-        uniform_plumber.img_unit
-    };
+        //dbg!(&cs.name);
+        gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
+        //dbg!(output_tex.texture_id);
 
-    for warning in uniform_plumber.warnings.iter() {
-        crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
-    }
-
-    let dispatch_size = (key.width, key.height);
-
-    unsafe {
-        let level = 0;
-        let layered = gl::FALSE;
-        gl::BindImageTexture(
-            img_unit as u32,
-            output_tex.texture_id,
-            level,
-            layered,
-            0,
-            gl::WRITE_ONLY,
-            key.format,
-        );
-        gl::Uniform1i(
-            gl::GetUniformLocation(cs.handle, "outputTex\0".as_ptr() as *const i8),
-            img_unit,
-        );
-        gl::Uniform4f(
-            gl::GetUniformLocation(cs.handle, "outputTex_size\0".as_ptr() as *const i8),
-            dispatch_size.0 as f32,
-            dispatch_size.1 as f32,
-            1f32 / dispatch_size.0 as f32,
-            1f32 / dispatch_size.1 as f32,
-        );
-        img_unit += 1;
-
-        let mut work_group_size: [i32; 3] = [0, 0, 0];
-        gl::GetProgramiv(
-            cs.handle,
-            gl::COMPUTE_WORK_GROUP_SIZE,
-            &mut work_group_size[0],
-        );
-
-        gpu_profiler::profile(&cs.name, || {
-            gl::DispatchCompute(
-                (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
-                (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
-                1,
-            )
-        });
-
-        for i in 0..img_unit {
-            gl::ActiveTexture(gl::TEXTURE0 + i as u32);
-            gl::BindTexture(gl::TEXTURE_2D, 0);
-        }
-    }
-
-    //dbg!(&cs.name);
-    gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
-    //dbg!(output_tex.texture_id);
-
-    Ok(output_tex)
+        Ok(output_tex)
+    })
 }
 
 #[snoozy]
@@ -736,126 +748,134 @@ pub async fn raster_tex(
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let output_tex = backend::texture::create_texture(*key);
-    let depth_buffer = create_render_buffer(RenderBufferKey {
-        width: key.width,
-        height: key.height,
-        format: gl::DEPTH_COMPONENT32F,
-    });
-
-    let mut uniform_plumber = ShaderUniformPlumber::default();
     let uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
-
     let raster_pipe = ctx.get(raster_pipe).await?;
-    let mut img_unit = 0;
 
-    let fb_handle = {
-        let mut handle: u32 = 0;
-        unsafe {
-            gl::GenFramebuffers(1, &mut handle);
-            gl::BindFramebuffer(gl::FRAMEBUFFER, handle);
-
-            gl::FramebufferTexture2D(
-                gl::FRAMEBUFFER,
-                gl::COLOR_ATTACHMENT0,
-                gl::TEXTURE_2D,
-                output_tex.texture_id,
-                0,
-            );
-
-            gl::FramebufferRenderbuffer(
-                gl::FRAMEBUFFER,
-                gl::DEPTH_ATTACHMENT,
-                gl::RENDERBUFFER,
-                depth_buffer.render_buffer_id,
-            );
-
-            gl::BindFramebuffer(gl::FRAMEBUFFER, handle);
-        }
-        handle
-    };
-
-    unsafe {
-        gl::UseProgram(raster_pipe.handle);
-        gl::Uniform4f(
-            gl::GetUniformLocation(raster_pipe.handle, "outputTex_size\0".as_ptr() as *const i8),
-            key.width as f32,
-            key.height as f32,
-            1.0 / key.width as f32,
-            1.0 / key.height as f32,
-        );
-        img_unit += 1;
-
-        gl::Viewport(0, 0, key.width as i32, key.height as i32);
-        gl::DepthFunc(gl::GEQUAL);
-        gl::Enable(gl::DEPTH_TEST);
-        gl::Disable(gl::CULL_FACE);
-
-        gl::ClearColor(0.0, 0.0, 0.0, 0.0);
-        gl::ClearDepth(0.0);
-        gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-
-        uniform_plumber.img_unit = img_unit;
-
-        #[derive(Default)]
-        struct MeshDrawData {
-            index_buffer: Option<u32>,
-            index_count: Option<u32>,
-        }
-
-        let mut mesh_stack = vec![MeshDrawData::default()];
-
-        uniform_plumber.plumb(
-            raster_pipe.handle,
-            &raster_pipe.reflection,
-            &uniforms,
-            &mut |plumber, event| match event {
-                PlumberEvent::SetUniform { name, value } => {
-                    match value {
-                        ResolvedShaderUniformValue::BufferAsset(buf)
-                            if name == "mesh_index_buf" =>
-                        {
-                            mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer_id);
-                        }
-                        ResolvedShaderUniformValue::Uint32(value) if name == "mesh_index_count" => {
-                            mesh_stack.last_mut().unwrap().index_count = Some(*value);
-                        }
-                        _ => {}
-                    }
-
-                    plumber.plumb(name, value)
-                }
-                PlumberEvent::EnterScope => {
-                    mesh_stack.push(Default::default());
-                }
-                PlumberEvent::LeaveScope => {
-                    let mesh = mesh_stack.pop().unwrap();
-                    if let Some(index_count) = mesh.index_count {
-                        if let Some(index_buffer) = mesh.index_buffer {
-                            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
-                            gl::DrawElements(
-                                gl::TRIANGLES,
-                                index_count as i32,
-                                gl::UNSIGNED_INT,
-                                std::ptr::null(),
-                            );
-                            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-                        } else {
-                            gl::DrawArrays(gl::TRIANGLES, 0, index_count as i32);
-                        }
-                    }
-                }
+    with_gl(|gl| {
+        let output_tex = backend::texture::create_texture(gl, *key);
+        let depth_buffer = create_render_buffer(
+            gl,
+            RenderBufferKey {
+                width: key.width,
+                height: key.height,
+                format: gl::DEPTH_COMPONENT32F,
             },
         );
 
-        gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
-        gl::DeleteFramebuffers(1, &fb_handle);
+        let mut uniform_plumber = ShaderUniformPlumber::default();
+        let mut img_unit = 0;
 
-        for i in 0..img_unit {
-            gl::ActiveTexture(gl::TEXTURE0 + i as u32);
-            gl::BindTexture(gl::TEXTURE_2D, 0);
+        let fb_handle = {
+            let mut handle: u32 = 0;
+            unsafe {
+                gl.GenFramebuffers(1, &mut handle);
+                gl.BindFramebuffer(gl::FRAMEBUFFER, handle);
+
+                gl.FramebufferTexture2D(
+                    gl::FRAMEBUFFER,
+                    gl::COLOR_ATTACHMENT0,
+                    gl::TEXTURE_2D,
+                    output_tex.texture_id,
+                    0,
+                );
+
+                gl.FramebufferRenderbuffer(
+                    gl::FRAMEBUFFER,
+                    gl::DEPTH_ATTACHMENT,
+                    gl::RENDERBUFFER,
+                    depth_buffer.render_buffer_id,
+                );
+
+                gl.BindFramebuffer(gl::FRAMEBUFFER, handle);
+            }
+            handle
+        };
+
+        unsafe {
+            gl.UseProgram(raster_pipe.handle);
+            gl.Uniform4f(
+                gl.GetUniformLocation(raster_pipe.handle, "outputTex_size\0".as_ptr() as *const i8),
+                key.width as f32,
+                key.height as f32,
+                1.0 / key.width as f32,
+                1.0 / key.height as f32,
+            );
+            img_unit += 1;
+
+            gl.Viewport(0, 0, key.width as i32, key.height as i32);
+            gl.DepthFunc(gl::GEQUAL);
+            gl.Enable(gl::DEPTH_TEST);
+            gl.Disable(gl::CULL_FACE);
+
+            gl.ClearColor(0.0, 0.0, 0.0, 0.0);
+            gl.ClearDepth(0.0);
+            gl.Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+
+            uniform_plumber.img_unit = img_unit;
+
+            #[derive(Default)]
+            struct MeshDrawData {
+                index_buffer: Option<u32>,
+                index_count: Option<u32>,
+            }
+
+            let mut mesh_stack = vec![MeshDrawData::default()];
+
+            uniform_plumber.plumb(
+                gl,
+                raster_pipe.handle,
+                &raster_pipe.reflection,
+                &uniforms,
+                &mut |plumber, event| match event {
+                    PlumberEvent::SetUniform { name, value } => {
+                        match value {
+                            ResolvedShaderUniformValue::BufferAsset(buf)
+                                if name == "mesh_index_buf" =>
+                            {
+                                mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer_id);
+                            }
+                            ResolvedShaderUniformValue::Uint32(value)
+                                if name == "mesh_index_count" =>
+                            {
+                                mesh_stack.last_mut().unwrap().index_count = Some(*value);
+                            }
+                            _ => {}
+                        }
+
+                        plumber.plumb(gl, name, value)
+                    }
+                    PlumberEvent::EnterScope => {
+                        mesh_stack.push(Default::default());
+                    }
+                    PlumberEvent::LeaveScope => {
+                        let mesh = mesh_stack.pop().unwrap();
+                        if let Some(index_count) = mesh.index_count {
+                            if let Some(index_buffer) = mesh.index_buffer {
+                                gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer);
+                                gl.DrawElements(
+                                    gl::TRIANGLES,
+                                    index_count as i32,
+                                    gl::UNSIGNED_INT,
+                                    std::ptr::null(),
+                                );
+                                gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+                            } else {
+                                gl.DrawArrays(gl::TRIANGLES, 0, index_count as i32);
+                            }
+                        }
+                    }
+                },
+            );
+
+            gl.BindFramebuffer(gl::FRAMEBUFFER, 0);
+            gl.DeleteFramebuffers(1, &fb_handle);
+
+            for i in 0..img_unit {
+                gl.ActiveTexture(gl::TEXTURE0 + i as u32);
+                gl.BindTexture(gl::TEXTURE_2D, 0);
+            }
         }
-    }
 
-    Ok(output_tex)
+        Ok(output_tex)
+    })
 }

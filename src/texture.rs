@@ -1,6 +1,6 @@
 pub use crate::backend::texture::{Texture, TextureKey};
 
-use crate::backend;
+use crate::backend::{self, opengl::*};
 use crate::blob::{load_blob, AssetPath, Blob};
 
 use snoozy::*;
@@ -30,6 +30,7 @@ pub async fn load_tex(ctx: Context, path: &AssetPath) -> Result<Texture> {
 }
 
 fn make_gl_tex<Img>(
+    gl: &gl::Gl,
     img: &Img,
     dims: (u32, u32),
     internal_format: u32,
@@ -39,14 +40,17 @@ where
     Img: image::GenericImageView + 'static,
 {
     let img_flipped = image::imageops::flip_vertical(img);
-    let res = backend::texture::create_texture(TextureKey {
-        width: dims.0,
-        height: dims.1,
-        format: internal_format,
-    });
+    let res = backend::texture::create_texture(
+        gl,
+        TextureKey {
+            width: dims.0,
+            height: dims.1,
+            format: internal_format,
+        },
+    );
     unsafe {
-        gl::BindTexture(gl::TEXTURE_2D, res.texture_id);
-        gl::TexSubImage2D(
+        gl.BindTexture(gl::TEXTURE_2D, res.texture_id);
+        gl.TexSubImage2D(
             gl::TEXTURE_2D,
             0,
             0,
@@ -61,7 +65,7 @@ where
     Ok(res)
 }
 
-fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
+fn load_ldr_tex(gl: &gl::Gl, blob: &Blob, params: &TexParams) -> Result<Texture> {
     use image::{DynamicImage, GenericImageView};
 
     let img = image::load_from_memory(&blob.contents)?;
@@ -70,8 +74,9 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
     println!("Loaded image: {:?} {:?}", dims, img.color());
 
     match img {
-        DynamicImage::ImageLuma8(ref img) => make_gl_tex(img, dims, gl::R8, gl::RED),
+        DynamicImage::ImageLuma8(ref img) => make_gl_tex(gl, img, dims, gl::R8, gl::RED),
         DynamicImage::ImageRgb8(ref img) => make_gl_tex(
+            gl,
             img,
             dims,
             if params.gamma == TexGamma::Linear {
@@ -82,6 +87,7 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
             gl::RGB,
         ),
         DynamicImage::ImageRgba8(ref img) => make_gl_tex(
+            gl,
             img,
             dims,
             if params.gamma == TexGamma::Linear {
@@ -95,7 +101,7 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
     }
 }
 
-fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
+fn load_hdr_tex(gl: &gl::Gl, blob: &Blob, _params: &TexParams) -> Result<Texture> {
     let mut img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
 
     // Flip the image because OpenGL.
@@ -108,14 +114,17 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
 
     println!("Loaded image: {}x{} HDR", img.width, img.height);
 
-    let res = backend::texture::create_texture(TextureKey {
-        width: img.width as u32,
-        height: img.height as u32,
-        format: gl::RGB32F,
-    });
+    let res = backend::texture::create_texture(
+        gl,
+        TextureKey {
+            width: img.width as u32,
+            height: img.height as u32,
+            format: gl::RGB32F,
+        },
+    );
     unsafe {
-        gl::BindTexture(gl::TEXTURE_2D, res.texture_id);
-        gl::TexSubImage2D(
+        gl.BindTexture(gl::TEXTURE_2D, res.texture_id);
+        gl.TexSubImage2D(
             gl::TEXTURE_2D,
             0,
             0,
@@ -138,23 +147,29 @@ pub async fn load_tex_with_params(
 ) -> Result<Texture> {
     let blob = ctx.get(&load_blob(path.clone())).await?;
 
-    if path.asset_name.ends_with(".hdr") {
-        load_hdr_tex(&*blob, params)
-    } else {
-        load_ldr_tex(&*blob, params)
-    }
+    with_gl(|gl| {
+        if path.asset_name.ends_with(".hdr") {
+            load_hdr_tex(gl, &*blob, params)
+        } else {
+            load_ldr_tex(gl, &*blob, params)
+        }
+    })
 }
 
 #[snoozy]
 pub async fn make_placeholder_rgba8_tex(_ctx: Context, texel_value: &[u8; 4]) -> Result<Texture> {
-    let res = backend::texture::create_texture(TextureKey {
-        width: 1,
-        height: 1,
-        format: gl::RGBA8,
-    });
-    unsafe {
-        gl::BindTexture(gl::TEXTURE_2D, res.texture_id);
-        gl::TexSubImage2D(
+    with_gl(|gl| unsafe {
+        let res = backend::texture::create_texture(
+            gl,
+            TextureKey {
+                width: 1,
+                height: 1,
+                format: gl::RGBA8,
+            },
+        );
+
+        gl.BindTexture(gl::TEXTURE_2D, res.texture_id);
+        gl.TexSubImage2D(
             gl::TEXTURE_2D,
             0,
             0,
@@ -165,6 +180,6 @@ pub async fn make_placeholder_rgba8_tex(_ctx: Context, texel_value: &[u8; 4]) ->
             gl::UNSIGNED_BYTE,
             std::mem::transmute(texel_value.as_ptr()),
         );
-    }
-    Ok(res)
+        Ok(res)
+    })
 }

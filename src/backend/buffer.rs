@@ -39,13 +39,13 @@ impl TransientResource for Buffer {
         }
     }
 
-    fn allocate_payload(key: BufferKey) -> BufferAllocation {
+    fn allocate_payload(gl: &gl::Gl, key: BufferKey) -> BufferAllocation {
         unsafe {
             let mut buffer_id = 0;
-            gl::GenBuffers(1, &mut buffer_id);
-            gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, buffer_id);
+            gl.GenBuffers(1, &mut buffer_id);
+            gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, buffer_id);
 
-            gl::BufferStorage(
+            gl.BufferStorage(
                 gl::SHADER_STORAGE_BUFFER,
                 key.size_bytes as isize,
                 std::ptr::null(),
@@ -54,13 +54,13 @@ impl TransientResource for Buffer {
 
             let tex = key.texture_format.map(|internal_format| {
                 let mut texture_id = 0u32;
-                gl::GenTextures(1, &mut texture_id);
-                gl::BindTexture(gl::TEXTURE_BUFFER, texture_id);
-                gl::TexBuffer(gl::TEXTURE_BUFFER, internal_format, buffer_id);
-                gl::BindTexture(gl::TEXTURE_BUFFER, 0);
+                gl.GenTextures(1, &mut texture_id);
+                gl.BindTexture(gl::TEXTURE_BUFFER, texture_id);
+                gl.TexBuffer(gl::TEXTURE_BUFFER, internal_format, buffer_id);
+                gl.BindTexture(gl::TEXTURE_BUFFER, 0);
 
-                let bindless_texture_handle: u64 = gl::GetTextureHandleARB(texture_id);
-                gl::MakeTextureHandleResidentARB(bindless_texture_handle);
+                let bindless_texture_handle: u64 = gl.GetTextureHandleARB(texture_id);
+                gl.MakeTextureHandleResidentARB(bindless_texture_handle);
 
                 (texture_id, bindless_texture_handle)
             });
@@ -74,6 +74,6 @@ impl TransientResource for Buffer {
     }
 }
 
-pub fn create_buffer(key: BufferKey) -> Buffer {
-    create_transient(key)
+pub fn create_buffer(gl: &gl::Gl, key: BufferKey) -> Buffer {
+    create_transient(gl, key)
 }

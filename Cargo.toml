@@ -15,7 +15,7 @@ lazy_static = "1.4"
 serde = "1.0"
 serde_derive = "1.0"
 bincode = "1.2"
-glutin = "0.19"
+glutin = "0.21.1"
 gl = { path = "lib/gl" }
 image = { version = "0.22", default-features = false, features = ["gif_codec", "jpeg", "ico", "png_codec", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt"] }
 hdrldr = "0.1.2"

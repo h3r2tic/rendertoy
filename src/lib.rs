@@ -34,6 +34,7 @@ pub use self::rgb9e5::*;
 pub use self::shader::*;
 pub use self::texture::*;
 pub use self::viewport::*;
+pub use crate::backend::opengl::*;
 
 pub type Point2 = na::Point2<f32>;
 pub type Vector2 = na::Vector2<f32>;
@@ -63,8 +64,8 @@ extern crate snoozy_macros;
 extern crate abomonation_derive;
 
 use clap::ArgMatches;
-use glutin::dpi::*;
-use glutin::GlContext;
+//use glutin::dpi::*;
+//use glutin::Context as GlContext;
 use nanovg::{Alignment, Color, Font, TextOptions};
 use std::str::FromStr;
 
@@ -115,8 +116,8 @@ struct GlState {
 }
 
 pub struct Rendertoy {
+    rt: Runtime,
     events_loop: glutin::EventsLoop,
-    gl_window: glutin::GlWindow,
     mouse_state: MouseState,
     cfg: RendertoyConfig,
     keyboard: KeyboardState,
@@ -213,11 +214,18 @@ impl RendertoyConfig {
 
 impl Rendertoy {
     pub fn new_with_config(cfg: RendertoyConfig) -> Rendertoy {
+        let rt = Runtime::new().unwrap();
         let events_loop = glutin::EventsLoop::new();
-        let window = glutin::WindowBuilder::new()
-            .with_title("Hello, rusty world!")
-            .with_dimensions(LogicalSize::new(cfg.width as f64, cfg.height as f64));
-        let context = glutin::ContextBuilder::new()
+
+        let el = glutin::EventsLoop::new();
+        let wb = glutin::WindowBuilder::new()
+            .with_title("Rendertoy")
+            .with_dimensions(glutin::dpi::LogicalSize::new(
+                cfg.width as f64,
+                cfg.height as f64,
+            ));
+
+        let windowed_context = glutin::ContextBuilder::new()
             .with_vsync(cfg.vsync)
             .with_gl_debug_flag(cfg.graphics_debugging)
             .with_gl_profile(if cfg.core_gl {
@@ -225,32 +233,29 @@ impl Rendertoy {
             } else {
                 glutin::GlProfile::Compatibility
             })
-            .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4, 3)));
-        let gl_window = glutin::GlWindow::new(window, context, &events_loop).unwrap();
+            .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4, 3)))
+            .build_windowed(wb, &el)
+            .unwrap();
 
-        unsafe {
-            gl_window.make_current().unwrap();
-        }
-
-        gl::load_with(|symbol| gl_window.get_proc_address(symbol) as *const _);
-
+        let windowed_context = unsafe { windowed_context.make_current().unwrap() };
+        let gl = gl::Gl::load_with(|symbol| windowed_context.get_proc_address(symbol) as *const _);
         let mut vao: u32 = 0;
 
         unsafe {
             use std::ffi::CStr;
             println!(
                 "GL_VENDOR: {:?}",
-                CStr::from_ptr(gl::GetString(gl::VENDOR) as *const i8)
+                CStr::from_ptr(gl.GetString(gl::VENDOR) as *const i8)
             );
             println!(
                 "GL_RENDERER: {:?}",
-                CStr::from_ptr(gl::GetString(gl::RENDERER) as *const i8)
+                CStr::from_ptr(gl.GetString(gl::RENDERER) as *const i8)
             );
 
-            gl::DebugMessageCallback(Some(gl_debug_message), std::ptr::null_mut());
+            gl.DebugMessageCallback(Some(gl_debug_message), std::ptr::null_mut());
 
             // Disable everything by default
-            gl::DebugMessageControl(
+            gl.DebugMessageControl(
                 gl::DONT_CARE,
                 gl::DONT_CARE,
                 gl::DONT_CARE,
@@ -259,7 +264,7 @@ impl Rendertoy {
                 0,
             );
 
-            gl::DebugMessageControl(
+            gl.DebugMessageControl(
                 gl::DONT_CARE,
                 gl::DONT_CARE,
                 gl::DONT_CARE,
@@ -268,7 +273,7 @@ impl Rendertoy {
                 1,
             );
 
-            gl::DebugMessageControl(
+            gl.DebugMessageControl(
                 gl::DEBUG_SOURCE_SHADER_COMPILER,
                 gl::DONT_CARE,
                 gl::DONT_CARE,
@@ -277,15 +282,18 @@ impl Rendertoy {
                 0,
             );
 
-            gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);
-            gl::Enable(gl::FRAMEBUFFER_SRGB);
+            gl.Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);
+            gl.Enable(gl::FRAMEBUFFER_SRGB);
 
-            gl::GenVertexArrays(1, &mut vao);
+            gl.GenVertexArrays(1, &mut vao);
         }
 
+        set_global_gl_context(gl, unsafe { windowed_context.make_not_current().unwrap() });
+        //set_global_gl_context(gl, unsafe { windowed_context.treat_as_not_current() });
+
         Rendertoy {
+            rt,
             events_loop,
-            gl_window,
             mouse_state: MouseState::default(),
             cfg,
             keyboard: KeyboardState::new(),
@@ -338,69 +346,72 @@ impl Rendertoy {
     }
 
     fn next_frame(&mut self) -> bool {
-        self.gl_window.swap_buffers().unwrap();
-
-        let mut running = true;
-
         let mut events = Vec::new();
         self.events_loop.poll_events(|event| events.push(event));
 
-        let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
-        let mut new_mouse_state = self.mouse_state.clone();
+        with_gl_and_context(|_, windowed_context| {
+            windowed_context.swap_buffers().unwrap();
 
-        for event in events.iter() {
-            #[allow(clippy::single_match)]
-            match event {
-                glutin::Event::WindowEvent { event, .. } => match event {
-                    glutin::WindowEvent::CloseRequested => running = false,
-                    glutin::WindowEvent::Resized(logical_size) => {
-                        let dpi_factor = self.gl_window.get_hidpi_factor();
-                        let phys_size = logical_size.to_physical(dpi_factor);
-                        self.gl_window.resize(phys_size);
-                    }
-                    glutin::WindowEvent::KeyboardInput { input, .. } => {
-                        if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
-                            if input.state == ElementState::Pressed {
-                                self.show_gui = !self.show_gui;
+            let mut running = true;
+
+            let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
+            let mut new_mouse_state = self.mouse_state.clone();
+
+            for event in events.iter() {
+                #[allow(clippy::single_match)]
+                match event {
+                    glutin::Event::WindowEvent { event, .. } => match event {
+                        glutin::WindowEvent::CloseRequested => running = false,
+                        glutin::WindowEvent::Resized(logical_size) => {
+                            let dpi_factor = windowed_context.window().get_hidpi_factor();
+                            let phys_size = logical_size.to_physical(dpi_factor);
+
+                            windowed_context.resize(phys_size);
+                        }
+                        glutin::WindowEvent::KeyboardInput { input, .. } => {
+                            if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
+                                if input.state == ElementState::Pressed {
+                                    self.show_gui = !self.show_gui;
+                                }
+                            } else {
+                                keyboard_events.push(*input);
                             }
-                        } else {
-                            keyboard_events.push(*input);
                         }
-                    }
-                    glutin::WindowEvent::CursorMoved {
-                        position: logical_pos,
-                        device_id: _,
-                        modifiers: _,
-                    } => {
-                        let dpi_factor = self.gl_window.get_hidpi_factor();
-                        let pos = logical_pos.to_physical(dpi_factor);
-                        new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
-                    }
-                    glutin::WindowEvent::MouseInput { state, button, .. } => {
-                        let button_id = match button {
-                            glutin::MouseButton::Left => 0,
-                            glutin::MouseButton::Middle => 1,
-                            glutin::MouseButton::Right => 2,
-                            _ => 0,
-                        };
+                        glutin::WindowEvent::CursorMoved {
+                            position: logical_pos,
+                            device_id: _,
+                            modifiers: _,
+                        } => {
+                            let dpi_factor = windowed_context.window().get_hidpi_factor();
+                            let pos = logical_pos.to_physical(dpi_factor);
+                            new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
+                        }
+                        glutin::WindowEvent::MouseInput { state, button, .. } => {
+                            let button_id = match button {
+                                glutin::MouseButton::Left => 0,
+                                glutin::MouseButton::Middle => 1,
+                                glutin::MouseButton::Right => 2,
+                                _ => 0,
+                            };
 
-                        if let glutin::ElementState::Pressed = state {
-                            new_mouse_state.button_mask |= 1 << button_id;
-                        } else {
-                            new_mouse_state.button_mask &= !(1 << button_id);
+                            if let glutin::ElementState::Pressed = state {
+                                new_mouse_state.button_mask |= 1 << button_id;
+                            } else {
+                                new_mouse_state.button_mask &= !(1 << button_id);
+                            }
                         }
-                    }
+                        _ => (),
+                    },
                     _ => (),
-                },
-                _ => (),
+                }
             }
-        }
 
-        // TODO: proper time
-        self.keyboard.update(keyboard_events, 1.0 / 60.0);
-        self.mouse_state.update(&new_mouse_state);
+            // TODO: proper time
+            self.keyboard.update(keyboard_events, 1.0 / 60.0);
+            self.mouse_state.update(&new_mouse_state);
 
-        running
+            running
+        })
     }
 
     fn get_currently_debugged_texture(&self) -> Option<&String> {
@@ -413,16 +424,13 @@ impl Rendertoy {
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        //unsafe {
-        //gl::ClearColor(1.0, 1.0, 1.0, 1.0);
-        //gl::Clear(gl::COLOR_BUFFER_BIT);
-        //}
-
-        let size = self
-            .gl_window
-            .get_inner_size()
-            .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
-            .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
+        let size = with_gl_and_context(|_, context| {
+            context
+                .window()
+                .get_inner_size()
+                .map(|s| s.to_physical(context.window().get_hidpi_factor()))
+                .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0))
+        });
         let window_size_pixels = (size.width as u32, size.height as u32);
 
         let now = std::time::Instant::now();
@@ -446,47 +454,57 @@ impl Rendertoy {
 
         let tex = callback(&state);
 
-        let rt = Runtime::new().unwrap();
-        let final_texture = rt.block_on(async move {
+        let final_texture = self.rt.block_on(async move {
             let snapshot = get_snapshot();
             let final_texture: Texture = (*snapshot.get(tex).await).clone();
             final_texture
         });
 
-        let mut debugged_texture: Option<u32> = None;
-        gpu_debugger::with_textures(|data| {
-            /*debugged_texture = self
-            .selected_debug_name
-            .as_ref()
-            .or(self.locked_debug_name.as_ref())
-            .and_then(|name| data.textures.get(name).cloned());*/
-            debugged_texture = self
-                .get_currently_debugged_texture()
-                .and_then(|name| data.textures.get(name).cloned());
-        });
+        with_gl(|gl| unsafe {
+            gl.ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
+            gl.BindVertexArray(self.gl_state.vao);
+            gl.Enable(gl::CULL_FACE);
+            gl.Disable(gl::STENCIL_TEST);
+            gl.Disable(gl::BLEND);
 
-        //draw_fullscreen_texture(final_texture, state.window_size_pixels);
-        backend::draw::draw_fullscreen_texture(
-            debugged_texture.unwrap_or(final_texture.texture_id),
-            state.window_size_pixels,
-        );
+            let mut debugged_texture: Option<u32> = None;
+            gpu_debugger::with_textures(|data| {
+                /*debugged_texture = self
+                .selected_debug_name
+                .as_ref()
+                .or(self.locked_debug_name.as_ref())
+                .and_then(|name| data.textures.get(name).cloned());*/
+                debugged_texture = self
+                    .get_currently_debugged_texture()
+                    .and_then(|name| data.textures.get(name).cloned());
+            });
+
+            //draw_fullscreen_texture(final_texture, state.window_size_pixels);
+            backend::draw::draw_fullscreen_texture(
+                gl,
+                debugged_texture.unwrap_or(final_texture.texture_id),
+                state.window_size_pixels,
+            );
+        });
     }
 
-    fn draw_profiling_stats(
+    /*fn draw_profiling_stats(
         &mut self,
+        gl: &gl::Gl,
+        windowed_context: &GlutinCurrentContext,
         vg_context: &nanovg::Context,
         font: &Font,
     ) -> Option<String> {
-        let size = self
-            .gl_window
+        let size = windowed_context
+            .window()
             .get_inner_size()
-            .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
+            .map(|s| s.to_physical(windowed_context.window().get_hidpi_factor()))
             .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
 
         let (width, height) = (size.width as i32, size.height as i32);
 
         unsafe {
-            gl::Viewport(0, 0, width, height);
+            gl.Viewport(0, 0, width, height);
         }
 
         let (width, height) = (width as f32, height as f32);
@@ -495,7 +513,7 @@ impl Rendertoy {
 
         vg_context.frame(
             (width, height),
-            self.gl_window.get_hidpi_factor() as f32,
+            windowed_context.window().get_hidpi_factor() as f32,
             |frame| {
                 let mut text_options = TextOptions {
                     size: 24.0,
@@ -593,27 +611,29 @@ impl Rendertoy {
 
     fn draw_warnings(
         &self,
+        gl: &gl::Gl,
+        windowed_context: &GlutinCurrentContext,
         vg_context: &nanovg::Context,
         font: &Font,
         warnings: impl Iterator<Item = String>,
     ) {
-        let size = self
-            .gl_window
+        let size = windowed_context
+            .window()
             .get_inner_size()
-            .map(|s| s.to_physical(self.gl_window.get_hidpi_factor()))
+            .map(|s| s.to_physical(windowed_context.window().get_hidpi_factor()))
             .unwrap_or(glutin::dpi::PhysicalSize::new(1.0, 1.0));
 
         let (width, height) = (size.width as i32, size.height as i32);
 
         unsafe {
-            gl::Viewport(0, 0, width, height);
+            gl.Viewport(0, 0, width, height);
         }
 
         let (width, height) = (width as f32, height as f32);
 
         vg_context.frame(
             (width, height),
-            self.gl_window.get_hidpi_factor() as f32,
+            windowed_context.window().get_hidpi_factor() as f32,
             |frame| {
                 let text_options = TextOptions {
                     size: 24.0,
@@ -639,59 +659,59 @@ impl Rendertoy {
                 }
             },
         );
-    }
+    }*/
 
     pub fn draw_forever<F>(mut self, mut callback: F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        let vg_context = nanovg::ContextBuilder::new()
-            .stencil_strokes()
-            .build()
-            .expect("Initialization of NanoVG failed!");
+        /*let vg_context = with_gl(|_| {
+            nanovg::ContextBuilder::new()
+                .stencil_strokes()
+                .build()
+                .expect("Initialization of NanoVG failed!")
+        });
 
-        let font;
-        {
+        let font = with_gl(|_| {
             let snapshot = get_snapshot();
             let rt = Runtime::new().unwrap();
             let blob = &*rt.block_on(snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf"))));
 
-            font = Some(
                 Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
-                    .expect("Failed to load font 'Roboto-Regular.ttf'"),
-            );
-        }
+                    .expect("Failed to load font 'Roboto-Regular.ttf'")
+        });
 
-        let font = font.expect("Failed to load font");
+        dbg!();*/
 
         let mut running = true;
         while running {
-            unsafe {
-                gl::ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
-                gl::BindVertexArray(self.gl_state.vao);
-                gl::Enable(gl::CULL_FACE);
-                gl::Disable(gl::STENCIL_TEST);
-                gl::Disable(gl::BLEND);
-            }
-
             self.draw_with_frame_snapshot(&mut callback);
 
-            gpu_profiler::end_frame();
-            gpu_debugger::end_frame();
+            with_gl_and_context(|gl, windowed_context| {
+                gpu_profiler::end_frame(gl);
+                gpu_debugger::end_frame();
 
-            if self.show_gui && !self.cfg.core_gl {
-                self.draw_warnings(&vg_context, &font, RTOY_WARNINGS.lock().unwrap().drain(..));
-                self.selected_debug_name = self.draw_profiling_stats(&vg_context, &font);
-            }
+                /*if self.show_gui && !self.cfg.core_gl {
+                    self.draw_warnings(
+                        gl,
+                        windowed_context,
+                        &vg_context,
+                        &font,
+                        RTOY_WARNINGS.lock().unwrap().drain(..),
+                    );
+                    self.selected_debug_name =
+                        self.draw_profiling_stats(gl, windowed_context, &vg_context, &font);
+                }*/
+            });
 
             running = self.next_frame();
         }
     }
 }
 
-pub fn draw_fullscreen_texture(tex: &Texture, framebuffer_size: (u32, u32)) {
+/*pub fn draw_fullscreen_texture(tex: &Texture, framebuffer_size: (u32, u32)) {
     backend::draw::draw_fullscreen_texture(tex.texture_id, framebuffer_size);
-}
+}*/
 
 lazy_static! {
     static ref RTOY_WARNINGS: std::sync::Mutex<Vec<String>> =

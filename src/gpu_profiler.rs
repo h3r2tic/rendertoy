@@ -3,13 +3,13 @@ use std::default::Default;
 use std::mem::replace;
 use std::sync::Mutex;
 
-pub fn profile<F: FnOnce()>(name: &str, f: F) {
-    GPU_PROFILER.lock().unwrap().profile(name, f);
+pub fn profile<F: FnOnce()>(gl: &gl::Gl, name: &str, f: F) {
+    GPU_PROFILER.lock().unwrap().profile(gl, name, f);
 }
 
-pub fn end_frame() {
+pub fn end_frame(gl: &gl::Gl) {
     let mut prof = GPU_PROFILER.lock().unwrap();
-    prof.try_finish_queries();
+    prof.try_finish_queries(gl);
 }
 
 pub fn with_stats<F: FnOnce(&GpuProfilerStats)>(f: F) {
@@ -56,16 +56,16 @@ struct ActiveQuery {
 }
 
 impl ActiveQuery {
-    fn try_get_duration_nanos(&self) -> Option<u64> {
+    fn try_get_duration_nanos(&self, gl: &gl::Gl) -> Option<u64> {
         let mut available: i32 = 0;
         unsafe {
-            gl::GetQueryObjectiv(self.handle, gl::QUERY_RESULT_AVAILABLE, &mut available);
+            gl.GetQueryObjectiv(self.handle, gl::QUERY_RESULT_AVAILABLE, &mut available);
         }
 
         if available != 0 {
             let mut nanos = 0u64;
             unsafe {
-                gl::GetQueryObjectui64v(self.handle, gl::QUERY_RESULT, &mut nanos);
+                gl.GetQueryObjectui64v(self.handle, gl::QUERY_RESULT, &mut nanos);
             }
 
             Some(nanos)
@@ -101,25 +101,25 @@ impl GpuProfiler {
         }
     }
 
-    fn new_query_handle(&mut self) -> u32 {
+    fn new_query_handle(&mut self, gl: &gl::Gl) -> u32 {
         if let Some(h) = self.inactive_queries.pop() {
             h
         } else {
             let mut h = 0u32;
             unsafe {
-                gl::GenQueries(1, &mut h);
+                gl.GenQueries(1, &mut h);
             }
             h
         }
     }
 
-    fn try_finish_queries(&mut self) {
+    fn try_finish_queries(&mut self, gl: &gl::Gl) {
         let finished_queries: Vec<(usize, (String, u64))> = self
             .active_queries
             .iter_mut()
             .enumerate()
             .filter_map(|(i, q)| {
-                if let Some(duration) = q.try_get_duration_nanos() {
+                if let Some(duration) = q.try_get_duration_nanos(gl) {
                     Some((i, (replace(&mut q.name, String::new()), duration)))
                 } else {
                     None
@@ -141,18 +141,18 @@ impl GpuProfiler {
         }
     }
 
-    fn profile<F: FnOnce()>(&mut self, name: &str, f: F) {
+    fn profile<F: FnOnce()>(&mut self, gl: &gl::Gl, name: &str, f: F) {
         self.frame_query_names.push(name.to_string());
 
-        let handle = self.new_query_handle();
+        let handle = self.new_query_handle(gl);
         unsafe {
-            gl::BeginQuery(gl::TIME_ELAPSED, handle);
+            gl.BeginQuery(gl::TIME_ELAPSED, handle);
         }
 
         f();
 
         unsafe {
-            gl::EndQuery(gl::TIME_ELAPSED);
+            gl.EndQuery(gl::TIME_ELAPSED);
         }
         self.active_queries.push(ActiveQuery {
             handle,
