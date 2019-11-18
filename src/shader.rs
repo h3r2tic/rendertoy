@@ -86,6 +86,15 @@ def_shader_uniform_types! {
 pub struct ShaderUniformHolder {
     name: String,
     value: ShaderUniformValue,
+    shallow_hash: u64,
+}
+
+use std::hash::{Hash, Hasher};
+impl Hash for ShaderUniformHolder {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.shallow_hash.hash(state);
+    }
 }
 
 pub struct ResolvedShaderUniformHolder {
@@ -101,10 +110,12 @@ impl ShaderUniformHolder {
     pub fn from_name_value(name: &str, value: ShaderUniformValue) -> ShaderUniformHolder {
         let mut s = DefaultSnoozyHash::default();
         whatever_hash(&value, &mut s);
+        let shallow_hash = std::hash::Hasher::finish(&mut s);
 
         ShaderUniformHolder {
             name: name.to_string(),
             value,
+            shallow_hash,
         }
     }
 

@@ -217,7 +217,6 @@ impl Rendertoy {
         let rt = Runtime::new().unwrap();
         let events_loop = glutin::EventsLoop::new();
 
-        let el = glutin::EventsLoop::new();
         let wb = glutin::WindowBuilder::new()
             .with_title("Rendertoy")
             .with_dimensions(glutin::dpi::LogicalSize::new(
@@ -234,7 +233,7 @@ impl Rendertoy {
                 glutin::GlProfile::Compatibility
             })
             .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4, 3)))
-            .build_windowed(wb, &el)
+            .build_windowed(wb, &events_loop)
             .unwrap();
 
         let windowed_context = unsafe { windowed_context.make_current().unwrap() };

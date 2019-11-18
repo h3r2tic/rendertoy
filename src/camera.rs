@@ -266,7 +266,7 @@ impl<CameraType: Camera> Camera for CameraConvergenceEnforcer<CameraType> {
             * na::convert::<_, na::Matrix4<f64>>(new_matrices.clip_to_view);
 
         let error: f64 = cs_corners
-            .into_iter()
+            .iter()
             .map(|cs_cur| {
                 let cs_prev = clip_to_prev_clip * cs_cur;
                 let cs_prev = cs_prev * (1.0 / cs_prev.w);
