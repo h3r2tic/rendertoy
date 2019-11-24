@@ -330,6 +330,71 @@ struct ComputePipeline {
     pub pipeline: vk::Pipeline,
 }
 
+fn convert_spirv_reflect_err<T>(res: std::result::Result<T, &'static str>) -> Result<T> {
+    match res {
+        Ok(res) => Ok(res),
+        Err(e) => bail!("SPIR-V reflection error: {}", e),
+    }
+}
+
+fn reflect_spirv_shader(shader_code: &[u32]) -> Result<spirv_reflect::ShaderModule> {
+    convert_spirv_reflect_err(spirv_reflect::ShaderModule::load_u32_data(shader_code))
+}
+
+fn generate_descriptor_set_layout(
+    refl: &spirv_reflect::ShaderModule,
+) -> std::result::Result<vk::DescriptorSetLayout, &'static str> {
+    let mut binding_flags: Vec<vk::DescriptorBindingFlagsEXT> = Vec::new();
+    let mut bindings: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
+    // vk::DescriptorBindingFlagsEXT::empty(),
+
+    let entry = Some("main");
+    for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
+        println!("descriptor set {}", descriptor_set.set);
+        for binding in descriptor_set.bindings.iter() {
+            use spirv_reflect::types::descriptor::ReflectDescriptorType;
+
+            match binding.descriptor_type {
+                ReflectDescriptorType::UniformBuffer => bindings.push(
+                    vk::DescriptorSetLayoutBinding::builder()
+                        .descriptor_count(binding.count)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                        .binding(binding.binding)
+                        .build(),
+                ),
+                ReflectDescriptorType::StorageImage => bindings.push(
+                    vk::DescriptorSetLayoutBinding::builder()
+                        .descriptor_count(binding.count)
+                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                        .binding(binding.binding)
+                        .build(),
+                ),
+                _ => print!("\tunsupported"),
+            }
+        }
+    }
+
+    let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
+        .binding_flags(&binding_flags)
+        .build();
+
+    let descriptor_set_layout = unsafe {
+        vk_device()
+            .create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::builder()
+                    .bindings(&bindings)
+                    .push_next(&mut binding_flags)
+                    .build(),
+                None,
+            )
+            .unwrap()
+    };
+
+    Ok(descriptor_set_layout)
+}
+
 fn create_compute_pipeline(
     vk_device: &Device,
     descriptor_set_layout: vk::DescriptorSetLayout,
@@ -394,40 +459,10 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         },
     )?;
 
-    let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
-        .binding_flags(&[
-            vk::DescriptorBindingFlagsEXT::empty(),
-            vk::DescriptorBindingFlagsEXT::empty(),
-            //vk::DescriptorBindingFlagsEXT::empty(),
-            //vk::DescriptorBindingFlagsEXT::VARIABLE_DESCRIPTOR_COUNT,
-        ])
-        .build();
-    let descriptor_set_layout = unsafe {
-        vk_device()
-            .create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::builder()
-                    .bindings(&[
-                        vk::DescriptorSetLayoutBinding::builder()
-                            .descriptor_count(1)
-                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                            .binding(0)
-                            .build(),
-                        vk::DescriptorSetLayoutBinding::builder()
-                            .descriptor_count(1)
-                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                            .binding(1)
-                            .build(),
-                    ])
-                    .push_next(&mut binding_flags)
-                    .build(),
-                None,
-            )
-            .unwrap()
-    };
-
     let spirv = shaderc_compile_glsl(&source);
+    let refl = reflect_spirv_shader(spirv.as_binary())?;
+
+    let descriptor_set_layout = convert_spirv_reflect_err(generate_descriptor_set_layout(&refl))?;
     let pipeline = create_compute_pipeline(vk_device(), descriptor_set_layout, spirv.as_binary())?;
 
     /*with_gl(|gl| {

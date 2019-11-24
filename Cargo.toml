@@ -33,3 +33,4 @@ ash-window = { git = "https://github.com/norse-rs/ash-window.git", revision = "9
 ash = "0.29.0"
 vk-sync = "0.1.6"
 shaderc = "0.6.1"
+spirv-reflect = "0.2.3"
