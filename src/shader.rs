@@ -842,13 +842,13 @@ pub async fn compute_tex(
     let cs = ctx.get(cs).await?;
     let uniforms = resolve(ctx, uniforms.clone()).await?;
 
+    let output_tex = backend::texture::create_texture(*key);
+
     unimplemented!()
 
     /*let mut uniform_plumber = ShaderUniformPlumber::default();
 
     with_gl(|gl| {
-        let output_tex = backend::texture::create_texture(gfx, *key);
-
         let mut img_unit = {
             unsafe {
                 gl.UseProgram(cs.handle);

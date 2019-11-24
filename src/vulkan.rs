@@ -32,8 +32,14 @@ fn extension_names() -> Vec<*const i8> {
     ]
 }
 
+pub struct VkCommandBufferData {
+    cb: vk::CommandBuffer,
+    pool: vk::CommandPool,
+}
+
 pub struct VkFrameData {
     pub descriptor_pool: Mutex<vk::DescriptorPool>,
+    pub command_buffer: Mutex<VkCommandBufferData>,
     pub present_image: vk::Image,
     pub present_image_view: vk::ImageView,
     pub rendering_complete_semaphore: vk::Semaphore,
@@ -114,6 +120,30 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
             .create_descriptor_pool(&descriptor_pool_info, None)
             .unwrap()
     }
+}
+
+fn allocate_frame_command_buffer(
+    device: &Device,
+    present_queue_family_index: u32,
+) -> VkCommandBufferData {
+    let pool_create_info = vk::CommandPoolCreateInfo::builder()
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+        .queue_family_index(present_queue_family_index);
+
+    let pool = unsafe { device.create_command_pool(&pool_create_info, None).unwrap() };
+
+    let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_buffer_count(1)
+        .command_pool(pool)
+        .level(vk::CommandBufferLevel::PRIMARY);
+
+    let cb = unsafe {
+        device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .unwrap()
+    }[0];
+
+    VkCommandBufferData { cb, pool }
 }
 
 impl VkKitchenSink {
@@ -348,6 +378,10 @@ impl VkKitchenSink {
             let frame_data = (0..present_images.len())
                 .map(|i| VkFrameData {
                     descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
+                    command_buffer: Mutex::new(allocate_frame_command_buffer(
+                        &device,
+                        present_queue_family_index,
+                    )),
                     present_image: present_images[i],
                     present_image_view: present_image_views[i],
                     rendering_complete_semaphore: rendering_complete_semaphores[i],
@@ -425,18 +459,6 @@ impl VkKitchenSink {
             }
 
             descriptor_sets
-        }
-    }
-
-    fn create_command_pool(&self) -> vk::CommandPool {
-        let pool_create_info = vk::CommandPoolCreateInfo::builder()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(self.present_queue_family_index);
-
-        unsafe {
-            self.device
-                .create_command_pool(&pool_create_info, None)
-                .unwrap()
         }
     }
 
@@ -568,4 +590,8 @@ pub fn initialize_vk_state(vk: VkKitchenSink) {
 
 pub fn vk_device() -> &'static Device {
     unsafe { std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().device) }
+}
+
+pub unsafe fn vk_all() -> &'static VkKitchenSink {
+    std::mem::transmute(VK_KITCHEN_SINK.as_ref().unwrap())
 }

@@ -39,7 +39,7 @@ impl TransientResource for Buffer {
         }
     }
 
-    fn allocate_payload(gfx: &crate::Gfx, key: BufferKey) -> BufferAllocation {
+    fn allocate_payload(key: BufferKey) -> BufferAllocation {
         /*unsafe {
             let mut buffer_id = 0;
             gl.GenBuffers(1, &mut buffer_id);
@@ -75,6 +75,6 @@ impl TransientResource for Buffer {
     }
 }
 
-pub fn create_buffer(gfx: &crate::Gfx, key: BufferKey) -> Buffer {
-    create_transient(gfx, key)
+pub fn create_buffer(key: BufferKey) -> Buffer {
+    create_transient(key)
 }

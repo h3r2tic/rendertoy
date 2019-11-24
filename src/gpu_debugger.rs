@@ -1,8 +1,9 @@
+use crate::vk;
 use std::collections::HashMap;
 use std::default::Default;
 use std::sync::Mutex;
 
-pub fn report_texture(name: &str, texture_handle: u32) {
+pub fn report_texture(name: &str, texture_handle: vk::ImageView) {
     GPU_DEBUGGER
         .lock()
         .unwrap()
@@ -19,7 +20,7 @@ pub fn end_frame() {
 
 #[derive(Default, Debug)]
 pub struct GpuDebuggerTextures {
-    pub textures: HashMap<String, u32>,
+    pub textures: HashMap<String, vk::ImageView>,
 }
 
 struct GpuDebugger {
@@ -37,7 +38,7 @@ impl GpuDebugger {
         self.textures.textures.clear();
     }
 
-    fn report_texture(&mut self, name: &str, texture_handle: u32) {
+    fn report_texture(&mut self, name: &str, texture_handle: vk::ImageView) {
         self.textures
             .textures
             .insert(name.to_string(), texture_handle);

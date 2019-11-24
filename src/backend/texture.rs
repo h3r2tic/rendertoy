@@ -1,5 +1,6 @@
 use super::transient_resource::*;
-use crate::vk;
+use crate::{vk, vulkan::*};
+use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct TextureKey {
@@ -56,42 +57,187 @@ impl TextureKey {
 
 #[derive(Clone)]
 pub struct Texture {
-    pub texture_id: u32,
-    pub sampler_id: u32,
-    pub bindless_handle: u64,
+    image: vk::Image,
+    pub view: vk::ImageView,
     pub key: TextureKey,
     _allocation: SharedTransientAllocation,
 }
 
 #[derive(Clone)]
-pub struct TextureAllocation {
-    texture_id: u32,
-    sampler_id: u32,
-    bindless_handle: u64,
+pub struct ImageResource {
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+    //sampler: vk::Sampler,
 }
 
-pub fn create_texture(gfx: &crate::Gfx, key: TextureKey) -> Texture {
-    create_transient(gfx, key)
+impl ImageResource {
+    fn new() -> Self {
+        ImageResource {
+            image: vk::Image::null(),
+            memory: vk::DeviceMemory::null(),
+            view: vk::ImageView::null(),
+            //sampler: vk::Sampler::null(),
+        }
+    }
+
+    fn create_image(
+        &mut self,
+        image_type: vk::ImageType,
+        format: vk::Format,
+        extent: vk::Extent3D,
+        tiling: vk::ImageTiling,
+        usage: vk::ImageUsageFlags,
+        memory_flags: vk::MemoryPropertyFlags,
+    ) {
+        unsafe {
+            let create_info = vk::ImageCreateInfo::builder()
+                .image_type(image_type)
+                .format(format)
+                .extent(extent)
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(tiling)
+                .usage(usage)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .build();
+
+            self.image = vk_device().create_image(&create_info, None).unwrap();
+
+            let requirements = vk_device().get_image_memory_requirements(self.image);
+            let memory_index = find_memorytype_index(
+                &requirements,
+                &vk_all().device_memory_properties,
+                memory_flags,
+            )
+            .expect("Unable to find suitable memory index image.");
+
+            let allocate_info = vk::MemoryAllocateInfo {
+                allocation_size: requirements.size,
+                memory_type_index: memory_index,
+                ..Default::default()
+            };
+
+            self.memory = vk_device().allocate_memory(&allocate_info, None).unwrap();
+
+            vk_device()
+                .bind_image_memory(self.image, self.memory, 0)
+                .expect("Unable to bind image memory");
+        }
+    }
+
+    fn create_view(
+        &mut self,
+        view_type: vk::ImageViewType,
+        format: vk::Format,
+        range: vk::ImageSubresourceRange,
+    ) {
+        let create_info = vk::ImageViewCreateInfo::builder()
+            .view_type(view_type)
+            .format(format)
+            .subresource_range(range)
+            .image(self.image)
+            .components(vk::ComponentMapping {
+                r: vk::ComponentSwizzle::R,
+                g: vk::ComponentSwizzle::G,
+                b: vk::ComponentSwizzle::B,
+                a: vk::ComponentSwizzle::A,
+            })
+            .build();
+        self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+    }
+}
+
+pub fn find_memorytype_index(
+    memory_req: &vk::MemoryRequirements,
+    memory_prop: &vk::PhysicalDeviceMemoryProperties,
+    flags: vk::MemoryPropertyFlags,
+) -> Option<u32> {
+    // Try to find an exactly matching memory flag
+    let best_suitable_index =
+        find_memorytype_index_f(memory_req, memory_prop, flags, |property_flags, flags| {
+            property_flags == flags
+        });
+    if best_suitable_index.is_some() {
+        return best_suitable_index;
+    }
+    // Otherwise find a memory flag that works
+    find_memorytype_index_f(memory_req, memory_prop, flags, |property_flags, flags| {
+        property_flags & flags == flags
+    })
+}
+
+pub fn find_memorytype_index_f<F: Fn(vk::MemoryPropertyFlags, vk::MemoryPropertyFlags) -> bool>(
+    memory_req: &vk::MemoryRequirements,
+    memory_prop: &vk::PhysicalDeviceMemoryProperties,
+    flags: vk::MemoryPropertyFlags,
+    f: F,
+) -> Option<u32> {
+    let mut memory_type_bits = memory_req.memory_type_bits;
+    for (index, ref memory_type) in memory_prop.memory_types.iter().enumerate() {
+        if memory_type_bits & 1 == 1 {
+            if f(memory_type.property_flags, flags) {
+                return Some(index as u32);
+            }
+        }
+        memory_type_bits = memory_type_bits >> 1;
+    }
+    None
+}
+
+pub fn create_texture(key: TextureKey) -> Texture {
+    create_transient(key)
 }
 
 impl TransientResource for Texture {
     type Desc = TextureKey;
-    type Allocation = TextureAllocation;
+    type Allocation = ImageResource;
 
     fn new(
         desc: TextureKey,
-        allocation: std::sync::Arc<TransientResourceAllocation<TextureKey, TextureAllocation>>,
+        allocation: std::sync::Arc<TransientResourceAllocation<TextureKey, Self::Allocation>>,
     ) -> Self {
         Self {
-            texture_id: allocation.payload.texture_id,
-            sampler_id: allocation.payload.sampler_id,
-            bindless_handle: allocation.payload.bindless_handle,
+            image: allocation.payload.image,
+            view: allocation.payload.view,
+            // TODO: sampler
             key: desc,
             _allocation: allocation,
         }
     }
 
-    fn allocate_payload(gfx: &crate::Gfx, key: TextureKey) -> TextureAllocation {
+    fn allocate_payload(key: TextureKey) -> Self::Allocation {
+        let format = vk::Format::from_raw(key.format);
+        let mut img = ImageResource::new();
+        img.create_image(
+            vk::ImageType::TYPE_2D,
+            format,
+            vk::Extent3D::builder()
+                .width(key.width)
+                .height(key.height)
+                .depth(1)
+                .build(),
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+        img.create_view(
+            vk::ImageViewType::TYPE_2D,
+            format,
+            vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+        );
+
+        // TODO: sampler
+
+        img
         /*unsafe {
             let mut prev_bound_texture = 0;
             gl.GetIntegerv(gl::TEXTURE_BINDING_2D, &mut prev_bound_texture);
@@ -130,6 +276,5 @@ impl TransientResource for Texture {
                 bindless_handle,
             }
         }*/
-        unimplemented!()
     }
 }

@@ -470,7 +470,7 @@ impl Rendertoy {
             gl.Disable(gl::STENCIL_TEST);
             gl.Disable(gl::BLEND);*/
 
-            let mut debugged_texture: Option<u32> = None;
+            let mut debugged_texture: Option<vk::ImageView> = None;
             gpu_debugger::with_textures(|data| {
                 /*debugged_texture = self
                 .selected_debug_name
@@ -487,7 +487,7 @@ impl Rendertoy {
             //draw_fullscreen_texture(final_texture, state.window_size_pixels);
             backend::draw::draw_fullscreen_texture(
                 &gfx,
-                debugged_texture.unwrap_or(final_texture.texture_id),
+                debugged_texture.unwrap_or(final_texture.view),
                 state.window_size_pixels,
             );
         }
@@ -691,6 +691,8 @@ impl Rendertoy {
 
         let mut running = true;
         while running {
+            // TODO: reset descriptor pool for the current frame
+
             self.draw_with_frame_snapshot(&mut callback);
 
             //with_gl_and_context(|gl, windowed_context|

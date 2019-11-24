@@ -14,7 +14,7 @@ pub trait TransientResource: Clone {
         desc: Self::Desc,
         allocation: std::sync::Arc<TransientResourceAllocation<Self::Desc, Self::Allocation>>,
     ) -> Self;
-    fn allocate_payload(gfx: &crate::Gfx, desc: Self::Desc) -> Self::Allocation;
+    fn allocate_payload(desc: Self::Desc) -> Self::Allocation;
 }
 
 // --------------------------------------------------------
@@ -79,7 +79,7 @@ lazy_static! {
     static ref TRANSIENT_RESOURCE_CACHE: Mutex<ShareMap> = { Mutex::new(TypeMap::custom()) };
 }
 
-pub fn create_transient<Res: TransientResource>(gfx: &crate::Gfx, desc: Res::Desc) -> Res {
+pub fn create_transient<Res: TransientResource>(desc: Res::Desc) -> Res {
     let mut res_cache_lock = TRANSIENT_RESOURCE_CACHE.lock().unwrap();
     let res_cache = res_cache_lock
         .entry::<Key<Res::Desc, Res::Allocation>>()
@@ -91,7 +91,7 @@ pub fn create_transient<Res: TransientResource>(gfx: &crate::Gfx, desc: Res::Des
         println!("allocating new resource: {:?}", desc);
         TransientResourceAllocation {
             key: TransientResourceKey(desc),
-            payload: Res::allocate_payload(gfx, desc),
+            payload: Res::allocate_payload(desc),
         }
     } else {
         //println!("reusing resource from cache");

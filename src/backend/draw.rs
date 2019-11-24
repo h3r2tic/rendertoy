@@ -1,6 +1,7 @@
 use super::shader::{make_program, make_shader};
+use crate::vk;
 
-pub fn draw_fullscreen_texture(gfx: &crate::Gfx, tex: u32, framebuffer_size: (u32, u32)) {
+pub fn draw_fullscreen_texture(gfx: &crate::Gfx, tex: vk::ImageView, framebuffer_size: (u32, u32)) {
     /*use std::sync::Mutex;
 
     lazy_static! {

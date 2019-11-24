@@ -306,7 +306,7 @@ impl Default for GpuMaterial {
 }
 
 async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u64 {
-    let tex = match map {
+    /*let tex = match map {
         MeshMaterialMap::Asset {
             ref path,
             ref params,
@@ -318,7 +318,8 @@ async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u64 {
         tex.bindless_handle
     } else {
         0u64
-    }
+    }*/
+    unimplemented!()
 }
 
 #[snoozy]
