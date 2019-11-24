@@ -9,6 +9,7 @@ use std::error::Error;
 use std::ffi::{CStr, CString};
 use std::io::Cursor;
 use std::os::raw::{c_char, c_void};
+use std::sync::Mutex;
 
 unsafe extern "system" fn vulkan_debug_callback(
     _: vk::DebugReportFlagsEXT,
@@ -31,6 +32,13 @@ fn extension_names() -> Vec<*const i8> {
     ]
 }
 
+pub struct VkFrameData {
+    pub descriptor_pool: Mutex<vk::DescriptorPool>,
+    pub present_image: vk::Image,
+    pub present_image_view: vk::ImageView,
+    pub rendering_complete_semaphore: vk::Semaphore,
+}
+
 pub struct VkKitchenSink {
     pub entry: Entry,
     pub instance: Instance,
@@ -50,11 +58,9 @@ pub struct VkKitchenSink {
     pub surface_resolution: vk::Extent2D,
 
     pub swapchain: vk::SwapchainKHR,
-    pub present_images: Vec<vk::Image>,
-    pub present_image_views: Vec<vk::ImageView>,
-
     pub swapchain_acquired_semaphores: Vec<vk::Semaphore>,
-    pub rendering_complete_semaphores: Vec<vk::Semaphore>,
+
+    pub frame_data: Vec<VkFrameData>,
 
     pub window_width: u32,
     pub window_height: u32,
@@ -84,6 +90,29 @@ impl ImageBarrier {
     fn with_discard(mut self, discard: bool) -> Self {
         self.discard = discard;
         self
+    }
+}
+
+fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
+    let descriptor_sizes = [
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::STORAGE_IMAGE,
+            descriptor_count: 1 << 20,
+        },
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: 1 << 20,
+        },
+    ];
+
+    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+        .pool_sizes(&descriptor_sizes)
+        .max_sets(1 << 20);
+
+    unsafe {
+        device
+            .create_descriptor_pool(&descriptor_pool_info, None)
+            .unwrap()
     }
 }
 
@@ -303,7 +332,7 @@ impl VkKitchenSink {
 
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
-            let create_swapchain_semaphores = || {
+            let create_swapchain_semaphores = || -> Vec<vk::Semaphore> {
                 (0..present_images.len())
                     .map(|_| {
                         device
@@ -315,6 +344,15 @@ impl VkKitchenSink {
 
             let swapchain_acquired_semaphores = create_swapchain_semaphores();
             let rendering_complete_semaphores = create_swapchain_semaphores();
+
+            let frame_data = (0..present_images.len())
+                .map(|i| VkFrameData {
+                    descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
+                    present_image: present_images[i],
+                    present_image_view: present_image_views[i],
+                    rendering_complete_semaphore: rendering_complete_semaphores[i],
+                })
+                .collect();
 
             Ok(Self {
                 entry,
@@ -329,10 +367,8 @@ impl VkKitchenSink {
                 surface_resolution,
                 swapchain_loader,
                 swapchain,
-                present_images,
-                present_image_views,
                 swapchain_acquired_semaphores,
-                rendering_complete_semaphores,
+                frame_data,
                 surface,
                 debug_call_back,
                 debug_report_loader,
@@ -349,12 +385,12 @@ impl VkKitchenSink {
         unsafe {
             let descriptor_sizes = [vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: self.present_images.len() as u32,
+                descriptor_count: self.frame_data.len() as u32,
             }];
 
             let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
                 .pool_sizes(&descriptor_sizes)
-                .max_sets(self.present_images.len() as u32);
+                .max_sets(self.frame_data.len() as u32);
 
             let descriptor_pool = self
                 .device
@@ -366,7 +402,7 @@ impl VkKitchenSink {
                 .allocate_descriptor_sets(
                     &vk::DescriptorSetAllocateInfo::builder()
                         .descriptor_pool(descriptor_pool)
-                        .set_layouts(&vec![descriptor_set_layout; self.present_image_views.len()])
+                        .set_layouts(&vec![descriptor_set_layout; self.frame_data.len()])
                         .build(),
                 )
                 .unwrap();
@@ -374,7 +410,7 @@ impl VkKitchenSink {
             for (img_idx, ds) in descriptor_sets.iter().enumerate() {
                 let image_info = [vk::DescriptorImageInfo::builder()
                     .image_layout(vk::ImageLayout::GENERAL)
-                    .image_view(self.present_image_views[img_idx])
+                    .image_view(self.frame_data[img_idx].present_image_view)
                     .build()];
 
                 let image_write = vk::WriteDescriptorSet::builder()
@@ -457,8 +493,9 @@ impl Drop for VkKitchenSink {
             for s in self.swapchain_acquired_semaphores.iter() {
                 self.device.destroy_semaphore(*s, None);
             }
-            for s in self.rendering_complete_semaphores.iter() {
-                self.device.destroy_semaphore(*s, None);
+            for s in self.frame_data.iter() {
+                self.device
+                    .destroy_semaphore(s.rendering_complete_semaphore, None);
             }
             self.swapchain_loader
                 .destroy_swapchain(self.swapchain, None);

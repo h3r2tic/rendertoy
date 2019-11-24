@@ -183,9 +183,13 @@ macro_rules! shader_uniform_bundle {
 
 pub struct ComputeShader {
     pub name: String,
-    handle: u32,
+    pipeline: ComputePipeline,
+    spirv_reflection: spirv_reflect::ShaderModule,
     reflection: ShaderReflection,
 }
+
+unsafe impl Send for ComputeShader {}
+unsafe impl Sync for ComputeShader {}
 
 #[derive(Debug)]
 pub struct ShaderUniformReflection {
@@ -341,16 +345,16 @@ fn reflect_spirv_shader(shader_code: &[u32]) -> Result<spirv_reflect::ShaderModu
     convert_spirv_reflect_err(spirv_reflect::ShaderModule::load_u32_data(shader_code))
 }
 
-fn generate_descriptor_set_layout(
+fn generate_descriptor_set_layouts(
     refl: &spirv_reflect::ShaderModule,
-) -> std::result::Result<vk::DescriptorSetLayout, &'static str> {
-    let mut binding_flags: Vec<vk::DescriptorBindingFlagsEXT> = Vec::new();
-    let mut bindings: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
-    // vk::DescriptorBindingFlagsEXT::empty(),
+) -> std::result::Result<Vec<vk::DescriptorSetLayout>, &'static str> {
+    let mut result = Vec::new();
 
     let entry = Some("main");
     for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
-        println!("descriptor set {}", descriptor_set.set);
+        let mut binding_flags: Vec<vk::DescriptorBindingFlagsEXT> = Vec::new();
+        let mut bindings: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
+
         for binding in descriptor_set.bindings.iter() {
             use spirv_reflect::types::descriptor::ReflectDescriptorType;
 
@@ -374,30 +378,32 @@ fn generate_descriptor_set_layout(
                 _ => print!("\tunsupported"),
             }
         }
+
+        let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
+            .binding_flags(&binding_flags)
+            .build();
+
+        let descriptor_set_layout = unsafe {
+            vk_device()
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::builder()
+                        .bindings(&bindings)
+                        .push_next(&mut binding_flags)
+                        .build(),
+                    None,
+                )
+                .unwrap()
+        };
+
+        result.push(descriptor_set_layout);
     }
 
-    let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
-        .binding_flags(&binding_flags)
-        .build();
-
-    let descriptor_set_layout = unsafe {
-        vk_device()
-            .create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::builder()
-                    .bindings(&bindings)
-                    .push_next(&mut binding_flags)
-                    .build(),
-                None,
-            )
-            .unwrap()
-    };
-
-    Ok(descriptor_set_layout)
+    Ok(result)
 }
 
 fn create_compute_pipeline(
     vk_device: &Device,
-    descriptor_set_layout: vk::DescriptorSetLayout,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
     shader_code: &[u32],
 ) -> Result<ComputePipeline> {
     use std::ffi::{CStr, CString};
@@ -405,7 +411,6 @@ fn create_compute_pipeline(
 
     let shader_entry_name = CString::new("main").unwrap();
 
-    let descriptor_set_layouts = [descriptor_set_layout];
     let layout_create_info =
         vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts);
 
@@ -435,12 +440,6 @@ fn create_compute_pipeline(
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
             .expect("pipeline")[0];
 
-        /*let data = ComputePipelineData {
-            pipeline: pipelines[0],
-            descriptor_layouts,
-            layout: pipeline_layout,
-        };*/
-
         Ok(ComputePipeline {
             pipeline_layout,
             pipeline,
@@ -462,26 +461,27 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
     let spirv = shaderc_compile_glsl(&source);
     let refl = reflect_spirv_shader(spirv.as_binary())?;
 
-    let descriptor_set_layout = convert_spirv_reflect_err(generate_descriptor_set_layout(&refl))?;
-    let pipeline = create_compute_pipeline(vk_device(), descriptor_set_layout, spirv.as_binary())?;
+    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
+    let pipeline =
+        create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv.as_binary())?;
 
-    /*with_gl(|gl| {
-        let handle = backend::shader::make_shader(gfx, gl::COMPUTE_SHADER, &source)?;
-        let name = std::path::Path::new(&path.asset_name)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or("unknown".to_string());
+    let name = std::path::Path::new(&path.asset_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or("unknown".to_string());
 
-        let handle = backend::shader::make_program(gfx, &[handle])?;
-        let reflection = reflect_shader(gfx, handle);
+    //let reflection = reflect_shader(gfx, handle);
+    // TODO
+    let reflection = ShaderReflection {
+        uniforms: Default::default(),
+    };
 
-        Ok(ComputeShader {
-            handle,
-            name,
-            reflection,
-        })
-    })*/
-    unimplemented!()
+    Ok(ComputeShader {
+        name,
+        pipeline,
+        reflection,
+        spirv_reflection: refl,
+    })
 }
 
 #[snoozy]
