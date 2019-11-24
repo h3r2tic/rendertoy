@@ -33,7 +33,7 @@ fn extension_names() -> Vec<*const i8> {
 }
 
 pub struct VkCommandBufferData {
-    cb: vk::CommandBuffer,
+    pub(crate) cb: vk::CommandBuffer,
     pool: vk::CommandPool,
 }
 
@@ -99,7 +99,7 @@ impl LinearUniformBuffer {
         }
     }
 
-    pub fn allocate(&self, bytes_count: usize) -> snoozy::Result<&[u8]> {
+    pub fn allocate(&self, bytes_count: usize) -> snoozy::Result<(u64, &[u8])> {
         unsafe {
             let alloc_size =
                 (bytes_count + self.min_offset_alignment - 1) & self.min_offset_alignment;
@@ -108,9 +108,12 @@ impl LinearUniformBuffer {
                 .fetch_add(alloc_size, std::sync::atomic::Ordering::Relaxed);
 
             if start_offset + bytes_count <= self.size as usize {
-                Ok(std::slice::from_raw_parts(
-                    self.mapped_ptr.offset(start_offset as isize),
-                    bytes_count,
+                Ok((
+                    start_offset as u64,
+                    std::slice::from_raw_parts(
+                        self.mapped_ptr.offset(start_offset as isize),
+                        bytes_count,
+                    ),
                 ))
             } else {
                 bail!("Out of memory in LinearUniformBuffer::allocate")
@@ -156,7 +159,7 @@ pub struct VkKitchenSink {
     pub window_height: u32,
 }
 
-struct ImageBarrier {
+pub struct ImageBarrier {
     image: vk::Image,
     prev_access: vk_sync::AccessType,
     next_access: vk_sync::AccessType,
@@ -164,7 +167,7 @@ struct ImageBarrier {
 }
 
 impl ImageBarrier {
-    fn new(
+    pub fn new(
         image: vk::Image,
         prev_access: vk_sync::AccessType,
         next_access: vk_sync::AccessType,
@@ -177,7 +180,7 @@ impl ImageBarrier {
         }
     }
 
-    fn with_discard(mut self, discard: bool) -> Self {
+    pub fn with_discard(mut self, discard: bool) -> Self {
         self.discard = discard;
         self
     }
@@ -190,7 +193,7 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
             descriptor_count: 1 << 20,
         },
         vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
             descriptor_count: 1 << 20,
         },
     ];
@@ -508,7 +511,7 @@ impl VkKitchenSink {
         }
     }
 
-    fn create_present_descriptor_sets(
+    pub(crate) fn create_present_descriptor_sets(
         &self,
         descriptor_set_layout: vk::DescriptorSetLayout,
     ) -> Vec<vk::DescriptorSet> {
@@ -575,7 +578,7 @@ impl VkKitchenSink {
         }
     }
 
-    fn record_image_barrier(&self, cb: vk::CommandBuffer, barrier: ImageBarrier) {
+    pub fn record_image_barrier(&self, cb: vk::CommandBuffer, barrier: ImageBarrier) {
         let range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -649,7 +652,9 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
         device
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
             .expect("Begin commandbuffer");
+
         f(device, command_buffer);
+
         device
             .end_command_buffer(command_buffer)
             .expect("End commandbuffer");
@@ -726,7 +731,7 @@ pub fn vk_device() -> &'static Device {
     unsafe { std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().device) }
 }
 
-pub unsafe fn vk_begin_frame(vk: VkKitchenSink, data_idx: usize) {
+pub unsafe fn vk_begin_frame(data_idx: usize) {
     unsafe {
         VK_CURRENT_FRAME_DATA_IDX = data_idx;
     }

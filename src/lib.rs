@@ -667,10 +667,13 @@ impl Rendertoy {
         );
     }*/
 
-    pub fn draw_forever<F>(mut self, mut callback: F)
+    pub fn draw_forever<F>(mut self, mut callback: F) -> snoozy::Result<()>
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
+        use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+        use vulkan::*;
+
         /*let vg_context = with_gl(|_| {
             nanovg::ContextBuilder::new()
                 .stencil_strokes()
@@ -689,13 +692,124 @@ impl Rendertoy {
 
         dbg!();*/
 
+        let mut swapchain_acquired_semaphore_idx = 0;
+
+        let vk = unsafe { vk_all() };
+        let present_descriptor_set_layout = unsafe {
+            vk.device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::builder()
+                        .bindings(&[vk::DescriptorSetLayoutBinding::builder()
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                            .binding(0)
+                            .build()])
+                        .build(),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let present_descriptor_sets =
+            vk.create_present_descriptor_sets(present_descriptor_set_layout);
+        let present_pipeline =
+            create_present_compute_pipeline(&vk.device, present_descriptor_set_layout)?;
+
         let mut running = true;
         while running {
             // TODO: reset descriptor pool for the current frame
             // TODO: reset atomics in dynamic uniform buffers
             // TODO: vk_begin_frame(present_image_index);
 
-            self.draw_with_frame_snapshot(&mut callback);
+            swapchain_acquired_semaphore_idx =
+                (swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
+
+            let present_index = unsafe {
+                let (present_index, _) = vk
+                    .swapchain_loader
+                    .acquire_next_image(
+                        vk.swapchain,
+                        std::u64::MAX,
+                        vk.swapchain_acquired_semaphores[swapchain_acquired_semaphore_idx],
+                        vk::Fence::null(),
+                    )
+                    .unwrap();
+                present_index as usize
+            };
+            unsafe {
+                vk_begin_frame(present_index);
+            }
+
+            let vk_frame = unsafe { vk_frame() };
+
+            // TODO: don't abuse the Copy
+            let cb = vk_frame.command_buffer.lock().unwrap().cb;
+
+            record_submit_commandbuffer(
+                &vk.device,
+                cb,
+                vk.present_queue,
+                &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
+                &[vk.swapchain_acquired_semaphores[swapchain_acquired_semaphore_idx]],
+                &[vk_frame.rendering_complete_semaphore],
+                |_device, command_buffer| {
+                    let present_image = vk_frame.present_image;
+
+                    vk.record_image_barrier(
+                        cb,
+                        ImageBarrier::new(
+                            present_image,
+                            vk_sync::AccessType::Present,
+                            vk_sync::AccessType::ComputeShaderWrite,
+                        )
+                        .with_discard(true),
+                    );
+
+                    self.draw_with_frame_snapshot(&mut callback);
+
+                    unsafe {
+                        vk.device.cmd_bind_pipeline(
+                            cb,
+                            vk::PipelineBindPoint::COMPUTE,
+                            present_pipeline.pipeline,
+                        );
+                        vk.device.cmd_bind_descriptor_sets(
+                            cb,
+                            vk::PipelineBindPoint::COMPUTE,
+                            present_pipeline.pipeline_layout,
+                            0,
+                            &[present_descriptor_sets[present_index]],
+                            &[],
+                        );
+                        vk.device
+                            .cmd_dispatch(cb, vk.window_width / 8, vk.window_height / 8, 1);
+                    }
+
+                    vk.record_image_barrier(
+                        cb,
+                        ImageBarrier::new(
+                            present_image,
+                            vk_sync::AccessType::ComputeShaderWrite,
+                            vk_sync::AccessType::Present,
+                        ),
+                    );
+                },
+            );
+
+            let wait_semaphores = [vk_frame.rendering_complete_semaphore];
+            let swapchains = [vk.swapchain];
+            let image_indices = [present_index as u32];
+            let present_info = vk::PresentInfoKHR::builder()
+                .wait_semaphores(&wait_semaphores)
+                .swapchains(&swapchains)
+                .image_indices(&image_indices);
+
+            unsafe {
+                vk.swapchain_loader
+                    .queue_present(vk.present_queue, &present_info)
+                    .unwrap();
+            }
 
             // TODO: flush mapped uniform buffer ranges
             // TODO: submit main command buffer
@@ -722,6 +836,8 @@ impl Rendertoy {
 
             running = self.next_frame();
         }
+
+        Ok(())
     }
 }
 
@@ -812,3 +928,58 @@ impl AddRenderPass for RenderPassList {
 
 // TODO
 pub struct Gfx {}
+
+fn create_present_compute_pipeline(
+    vk_device: &ash::Device,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+) -> snoozy::Result<crate::shader::ComputePipeline> {
+    use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+    use std::ffi::{CStr, CString};
+    use std::io::Cursor;
+
+    let shader_entry_name = CString::new("main").unwrap();
+    let mut shader_spv = Cursor::new(&include_bytes!("../comp.spv")[..]);
+    let shader_code = ash::util::read_spv(&mut shader_spv).expect("Failed to read shader spv");
+
+    let descriptor_set_layouts = [descriptor_set_layout];
+    let layout_create_info =
+        vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts);
+
+    unsafe {
+        let shader_module = vk_device
+            .create_shader_module(
+                &vk::ShaderModuleCreateInfo::builder().code(&shader_code),
+                None,
+            )
+            .unwrap();
+
+        let stage_create_info = vk::PipelineShaderStageCreateInfo::builder()
+            .module(shader_module)
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .name(&shader_entry_name);
+
+        let pipeline_layout = vk_device
+            .create_pipeline_layout(&layout_create_info, None)
+            .unwrap();
+
+        let pipeline_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(stage_create_info.build())
+            .layout(pipeline_layout);
+
+        // TODO: pipeline cache
+        let pipeline = vk_device
+            .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
+            .expect("pipeline")[0];
+
+        /*let data = ComputePipelineData {
+            pipeline: pipelines[0],
+            descriptor_layouts,
+            layout: pipeline_layout,
+        };*/
+
+        Ok(crate::shader::ComputePipeline {
+            pipeline_layout,
+            pipeline,
+        })
+    }
+}

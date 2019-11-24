@@ -186,6 +186,7 @@ pub struct ComputeShader {
     pipeline: ComputePipeline,
     spirv_reflection: spirv_reflect::ShaderModule,
     reflection: ShaderReflection,
+    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
 }
 
 unsafe impl Send for ComputeShader {}
@@ -329,7 +330,7 @@ fn shaderc_compile_glsl(source: &[shader_prepper::SourceChunk]) -> shaderc::Comp
     binary_result
 }
 
-struct ComputePipeline {
+pub struct ComputePipeline {
     pub pipeline_layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
 }
@@ -362,7 +363,7 @@ fn generate_descriptor_set_layouts(
                 ReflectDescriptorType::UniformBuffer => bindings.push(
                     vk::DescriptorSetLayoutBinding::builder()
                         .descriptor_count(binding.count)
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                         .binding(binding.binding)
                         .build(),
@@ -481,6 +482,7 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         pipeline,
         reflection,
         spirv_reflection: refl,
+        descriptor_set_layouts,
     })
 }
 
@@ -841,32 +843,72 @@ pub async fn compute_tex(
 ) -> Result<Texture> {
     let cs = ctx.get(cs).await?;
     let uniforms = resolve(ctx, uniforms.clone()).await?;
-
     let output_tex = backend::texture::create_texture(*key);
 
     let mut uniform_plumber = ShaderUniformPlumber::default();
 
-    /*
     let device = vk_device();
-    device.cmd_bind_pipeline(
-        cb,
-        vk::PipelineBindPoint::COMPUTE,
-        cs.pipeline,
-    );
-    device.cmd_bind_descriptor_sets(
-        cb,
-        vk::PipelineBindPoint::COMPUTE,
-        cs.pipeline_layout,
-        0,
-        &[present_descriptor_sets[present_index]],
-        &[],
-    );
+    let vk_frame = unsafe { vk_frame() };
+
+    let descriptor_sets = unsafe {
+        let descriptor_sets = {
+            let descriptor_pool = *vk_frame.descriptor_pool.lock().unwrap();
+            let sets = device.allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::builder()
+                    .descriptor_pool(descriptor_pool)
+                    .set_layouts(&cs.descriptor_set_layouts)
+                    .build(),
+            )?;
+            drop(descriptor_pool);
+            sets
+        };
+
+        // TODO: update
+        /*for (img_idx, ds) in descriptor_sets.iter().enumerate() {
+            let image_info = [vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::GENERAL)
+                .image_view(self.present_image_views[img_idx])
+                .build()];
+
+            let image_write = vk::WriteDescriptorSet::builder()
+                .dst_set(*ds)
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(&image_info)
+                .build();
+
+            self.device.update_descriptor_sets(&[image_write], &[]);
+        }*/
+
+        descriptor_sets
+    };
+
+    let cb = vk_frame.command_buffer.lock().unwrap();
+    let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        gl.UseProgram(cs.handle);
+        device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
+
+        // TODO
+        let dynamic_offsets = [0];
+
+        device.cmd_bind_descriptor_sets(
+            cb,
+            vk::PipelineBindPoint::COMPUTE,
+            cs.pipeline.pipeline_layout,
+            0,
+            &descriptor_sets,
+            &dynamic_offsets,
+        );
+
+        let dispatch_size = (key.width, key.height);
+
+        // TODO: find group size
+        device.cmd_dispatch(cb, dispatch_size.0 / 8, dispatch_size.1 / 8, 1);
     }
 
-    uniform_plumber.plumb(
+    /*uniform_plumber.plumb(
         gl,
         cs.handle,
         &cs.reflection,
@@ -880,11 +922,9 @@ pub async fn compute_tex(
 
     for warning in uniform_plumber.warnings.iter() {
         crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
-    }
+    }*/
 
-    let dispatch_size = (key.width, key.height);
-
-    unsafe {
+    /*unsafe {
         let level = 0;
         let layered = gl::FALSE;
         gl.BindImageTexture(
@@ -928,15 +968,13 @@ pub async fn compute_tex(
             gl.ActiveTexture(gl::TEXTURE0 + i as u32);
             gl.BindTexture(gl::TEXTURE_2D, 0);
         }
-    }
+    }*/
 
     //dbg!(&cs.name);
-    gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
+    gpu_debugger::report_texture(&cs.name, output_tex.view);
     //dbg!(output_tex.texture_id);
 
-    Ok(output_tex)*/
-
-    unimplemented!()
+    Ok(output_tex)
 }
 
 #[snoozy]
