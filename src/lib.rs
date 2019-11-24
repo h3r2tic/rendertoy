@@ -16,6 +16,7 @@ mod shader;
 mod switchable_graphics;
 mod texture;
 mod viewport;
+mod vulkan;
 
 pub mod compute_tex_macro;
 
@@ -33,6 +34,7 @@ pub use self::rgb9e5::*;
 pub use self::shader::*;
 pub use self::texture::*;
 pub use self::viewport::*;
+pub use self::vulkan::VkKitchenSink;
 
 pub use ash::{vk, vk::Format};
 
@@ -220,7 +222,10 @@ impl Rendertoy {
                 cfg.width as f64,
                 cfg.height as f64,
             ))
-            .build(&events_loop).expect("window");
+            .build(&events_loop)
+            .expect("window");
+
+        crate::vulkan::initialize_vk_state(VkKitchenSink::new(&window).unwrap());
 
         /*let windowed_context = winit::ContextBuilder::new()
             .with_vsync(cfg.vsync)
@@ -410,7 +415,7 @@ impl Rendertoy {
 
             running
         }
-    //)
+        //)
     }
 
     fn get_currently_debugged_texture(&self) -> Option<&String> {
@@ -423,10 +428,11 @@ impl Rendertoy {
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        let size = self.window
-                .get_inner_size()
-                .map(|s| s.to_physical(self.window.get_hidpi_factor()))
-                .unwrap_or(winit::dpi::PhysicalSize::new(1.0, 1.0));
+        let size = self
+            .window
+            .get_inner_size()
+            .map(|s| s.to_physical(self.window.get_hidpi_factor()))
+            .unwrap_or(winit::dpi::PhysicalSize::new(1.0, 1.0));
         let window_size_pixels = (size.width as u32, size.height as u32);
 
         let now = std::time::Instant::now();
@@ -457,7 +463,7 @@ impl Rendertoy {
         });
 
         //with_gl(|gl| unsafe
-            {
+        {
             /*gl.ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
             gl.BindVertexArray(self.gl_state.vao);
             gl.Enable(gl::CULL_FACE);
@@ -485,7 +491,7 @@ impl Rendertoy {
                 state.window_size_pixels,
             );
         }
-    //);
+        //);
     }
 
     /*fn draw_profiling_stats(
@@ -689,7 +695,7 @@ impl Rendertoy {
 
             //with_gl_and_context(|gl, windowed_context|
             {
-                let gfx = Gfx {};   // TODO
+                let gfx = Gfx {}; // TODO
                 gpu_profiler::end_frame(&gfx);
                 gpu_debugger::end_frame();
 
@@ -705,7 +711,7 @@ impl Rendertoy {
                         self.draw_profiling_stats(gfx, windowed_context, &vg_context, &font);
                 }*/
             }
-        //);
+            //);
 
             running = self.next_frame();
         }

@@ -4,6 +4,9 @@ use crate::buffer::Buffer;
 use crate::gpu_debugger;
 use crate::gpu_profiler;
 use crate::texture::{Texture, TextureKey};
+use crate::vulkan::*;
+use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+use ash::{vk, Device};
 use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
 use snoozy::futures::future::{try_join_all, BoxFuture, FutureExt};
@@ -287,6 +290,99 @@ impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider {
     }
 }
 
+fn get_shader_text(source: &[shader_prepper::SourceChunk]) -> String {
+    let preamble = "#version 430\n".to_string();
+
+    let mod_sources = source.iter().enumerate().map(|(i, s)| {
+        let s = format!("#line 0 {}\n", i + 1) + &s.source;
+        s
+    });
+    let mod_sources = std::iter::once(preamble).chain(mod_sources);
+    let mod_sources: Vec<_> = mod_sources.collect();
+
+    mod_sources.join("")
+}
+
+fn shaderc_compile_glsl(source: &[shader_prepper::SourceChunk]) -> shaderc::CompilationArtifact {
+    use shaderc;
+    let source = get_shader_text(source);
+
+    let mut compiler = shaderc::Compiler::new().unwrap();
+    let mut options = shaderc::CompileOptions::new().unwrap();
+    options.add_macro_definition("EP", Some("main"));
+    let binary_result = compiler
+        .compile_into_spirv(
+            &source,
+            shaderc::ShaderKind::Compute,
+            "shader.glsl",
+            "main",
+            Some(&options),
+        )
+        .unwrap();
+
+    assert_eq!(Some(&0x07230203), binary_result.as_binary().first());
+
+    binary_result
+}
+
+struct ComputePipeline {
+    pub pipeline_layout: vk::PipelineLayout,
+    pub pipeline: vk::Pipeline,
+}
+
+fn create_compute_pipeline(
+    vk_device: &Device,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    shader_code: &[u32],
+) -> Result<ComputePipeline> {
+    use std::ffi::{CStr, CString};
+    use std::io::Cursor;
+
+    let shader_entry_name = CString::new("main").unwrap();
+
+    let descriptor_set_layouts = [descriptor_set_layout];
+    let layout_create_info =
+        vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts);
+
+    unsafe {
+        let shader_module = vk_device
+            .create_shader_module(
+                &vk::ShaderModuleCreateInfo::builder().code(&shader_code),
+                None,
+            )
+            .unwrap();
+
+        let stage_create_info = vk::PipelineShaderStageCreateInfo::builder()
+            .module(shader_module)
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .name(&shader_entry_name);
+
+        let pipeline_layout = vk_device
+            .create_pipeline_layout(&layout_create_info, None)
+            .unwrap();
+
+        let pipeline_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(stage_create_info.build())
+            .layout(pipeline_layout);
+
+        // TODO: pipeline cache
+        let pipeline = vk_device
+            .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
+            .expect("pipeline")[0];
+
+        /*let data = ComputePipelineData {
+            pipeline: pipelines[0],
+            descriptor_layouts,
+            layout: pipeline_layout,
+        };*/
+
+        Ok(ComputePipeline {
+            pipeline_layout,
+            pipeline,
+        })
+    }
+}
+
 #[snoozy]
 pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
     let source = shader_prepper::process_file(
@@ -297,6 +393,42 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
             asset_name: String::new(),
         },
     )?;
+
+    let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
+        .binding_flags(&[
+            vk::DescriptorBindingFlagsEXT::empty(),
+            vk::DescriptorBindingFlagsEXT::empty(),
+            //vk::DescriptorBindingFlagsEXT::empty(),
+            //vk::DescriptorBindingFlagsEXT::VARIABLE_DESCRIPTOR_COUNT,
+        ])
+        .build();
+    let descriptor_set_layout = unsafe {
+        vk_device()
+            .create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::builder()
+                    .bindings(&[
+                        vk::DescriptorSetLayoutBinding::builder()
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                            .binding(0)
+                            .build(),
+                        vk::DescriptorSetLayoutBinding::builder()
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                            .binding(1)
+                            .build(),
+                    ])
+                    .push_next(&mut binding_flags)
+                    .build(),
+                None,
+            )
+            .unwrap()
+    };
+
+    let spirv = shaderc_compile_glsl(&source);
+    let pipeline = create_compute_pipeline(vk_device(), descriptor_set_layout, spirv.as_binary())?;
 
     /*with_gl(|gl| {
         let handle = backend::shader::make_shader(gfx, gl::COMPUTE_SHADER, &source)?;
@@ -672,12 +804,12 @@ pub async fn compute_tex(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    unimplemented!()
-
-    /*let cs = ctx.get(cs).await?;
+    let cs = ctx.get(cs).await?;
     let uniforms = resolve(ctx, uniforms.clone()).await?;
 
-    let mut uniform_plumber = ShaderUniformPlumber::default();
+    unimplemented!()
+
+    /*let mut uniform_plumber = ShaderUniformPlumber::default();
 
     with_gl(|gl| {
         let output_tex = backend::texture::create_texture(gfx, *key);

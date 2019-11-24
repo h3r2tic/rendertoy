@@ -1,6 +1,6 @@
 pub use crate::backend::buffer::{Buffer, BufferKey};
-use crate::vk;
 use crate::backend::{self};
+use crate::vk;
 
 use snoozy::*;
 use std::mem::size_of;
