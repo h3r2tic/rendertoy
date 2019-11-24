@@ -1,5 +1,5 @@
-pub use glutin::{ElementState, KeyboardInput, VirtualKeyCode};
 use std::collections::HashMap;
+pub use winit::{ElementState, KeyboardInput, VirtualKeyCode};
 
 pub struct KeyState {
     ticks: u32,

@@ -1,7 +1,7 @@
 use super::shader::{make_program, make_shader};
 
-pub fn draw_fullscreen_texture(gl: &gl::Gl, tex: u32, framebuffer_size: (u32, u32)) {
-    use std::sync::Mutex;
+pub fn draw_fullscreen_texture(gfx: &crate::Gfx, tex: u32, framebuffer_size: (u32, u32)) {
+    /*use std::sync::Mutex;
 
     lazy_static! {
         static ref PROG: Mutex<Option<u32>> = { Mutex::new(None) };
@@ -47,7 +47,7 @@ pub fn draw_fullscreen_texture(gl: &gl::Gl, tex: u32, framebuffer_size: (u32, u3
             )
             .expect("Pixel shader failed to compile");
 
-            Some(make_program(gl, &[vs, ps]).expect("Shader failed to link"))
+            Some(make_program(gfx, &[vs, ps]).expect("Shader failed to link"))
         };
     }
     let prog = PROG.lock().unwrap().unwrap();
@@ -85,5 +85,6 @@ pub fn draw_fullscreen_texture(gl: &gl::Gl, tex: u32, framebuffer_size: (u32, u3
 
         gl.DrawArrays(gl::TRIANGLES, 0, 3);
         gl.UseProgram(0);
-    }
+    }*/
+    unimplemented!()
 }

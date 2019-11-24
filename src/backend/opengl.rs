@@ -1,7 +1,4 @@
-use std::sync::Mutex;
-
-pub type GlutinContext = glutin::WindowedContext<glutin::NotCurrent>;
-pub type GlutinCurrentContext = glutin::WindowedContext<glutin::PossiblyCurrent>;
+/*use std::sync::Mutex;
 
 struct GlContext {
     gl: gl::Gl,
@@ -23,7 +20,7 @@ pub fn with_gl<F, R>(f: F) -> R
 where
     F: FnOnce(&gl::Gl) -> R,
 {
-    with_gl_and_context(|gl, _| f(gl))
+    with_gl_and_context(|gl, _| f(gfx))
 }
 
 pub fn with_gl_and_context<F, R>(f: F) -> R
@@ -45,35 +42,6 @@ where
     let res = f(&opengl.gl, &window);
 
     let window = unsafe { window.make_not_current().expect("make_not_current failed") };
-    opengl.window = Some(window);
-    res
-}
-
-/*
-pub fn with_gl_and_context<F, R>(f: F) -> R
-where
-    F: FnOnce(&gl::Gl, &GlutinCurrentContext) -> R,
-{
-    let mut opengl = OPENGL.lock().unwrap();
-    let opengl = opengl.as_mut().unwrap();
-
-    let window = unsafe {
-        match opengl
-            .window
-            .take()
-            .unwrap()
-            .make_current() {
-                Err((window, _)) => window.treat_as_current(),
-                Ok(window) => window
-            }
-    };
-
-    let res = f(&opengl.gl, &window);
-
-    let window = unsafe { match window.make_not_current() {
-        Err((window, _)) => window.treat_as_not_current(),
-        Ok(window) => window
-} };
     opengl.window = Some(window);
     res
 }

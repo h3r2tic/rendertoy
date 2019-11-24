@@ -19,8 +19,8 @@ pub struct RenderBufferAllocation {
     render_buffer_id: u32,
 }
 
-pub fn create_render_buffer(gl: &gl::Gl, key: RenderBufferKey) -> RenderBuffer {
-    create_transient(gl, key)
+pub fn create_render_buffer(gfx: &crate::Gfx, key: RenderBufferKey) -> RenderBuffer {
+    create_transient(gfx, key)
 }
 
 impl TransientResource for RenderBuffer {
@@ -40,8 +40,8 @@ impl TransientResource for RenderBuffer {
         }
     }
 
-    fn allocate_payload(gl: &gl::Gl, key: RenderBufferKey) -> RenderBufferAllocation {
-        unsafe {
+    fn allocate_payload(gfx: &crate::Gfx, key: RenderBufferKey) -> RenderBufferAllocation {
+        /*unsafe {
             let mut render_buffer_id = 0;
             gl.GenRenderbuffers(1, &mut render_buffer_id);
             gl.BindRenderbuffer(gl::RENDERBUFFER, render_buffer_id);
@@ -53,6 +53,7 @@ impl TransientResource for RenderBuffer {
             );
 
             RenderBufferAllocation { render_buffer_id }
-        }
+        }*/
+        unimplemented!()
     }
 }

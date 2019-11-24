@@ -1,6 +1,6 @@
 pub use crate::backend::texture::{Texture, TextureKey};
 
-use crate::backend::{self, opengl::*};
+use crate::backend::{self};
 use crate::blob::{load_blob, AssetPath, Blob};
 
 use snoozy::*;
@@ -40,7 +40,8 @@ where
 {
     let img_flipped = image::imageops::flip_vertical(img);
 
-    with_gl(|gl| {
+    unimplemented!()
+    /*with_gl(|gl| {
         let res = backend::texture::create_texture(
             gl,
             TextureKey {
@@ -64,7 +65,7 @@ where
             );
         }
         Ok(res)
-    })
+    })*/
 }
 
 fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
@@ -75,7 +76,7 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
     let dims = img.dimensions();
     println!("Loaded image: {:?} {:?}", dims, img.color());
 
-    match img {
+    /*match img {
         DynamicImage::ImageLuma8(ref img) => make_gl_tex(img, dims, gl::R8, gl::RED),
         DynamicImage::ImageRgb8(ref img) => make_gl_tex(
             img,
@@ -98,12 +99,15 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
             gl::RGBA,
         ),
         _ => Err(format_err!("Unsupported image format")),
-    }
+    }*/
+    unimplemented!()
 }
 
 fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
     let mut img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
 
+    unimplemented!()
+    /*
     // Flip the image because OpenGL.
     for y in 0..img.height / 2 {
         for x in 0..img.width {
@@ -138,7 +142,7 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
             );
         }
         Ok(res)
-    })
+    })*/
 }
 
 #[snoozy]
@@ -158,7 +162,9 @@ pub async fn load_tex_with_params(
 
 #[snoozy]
 pub async fn make_placeholder_rgba8_tex(_ctx: Context, texel_value: &[u8; 4]) -> Result<Texture> {
-    with_gl(|gl| unsafe {
+    unimplemented!()
+
+    /*with_gl(|gl| unsafe {
         let res = backend::texture::create_texture(
             gl,
             TextureKey {
@@ -181,5 +187,5 @@ pub async fn make_placeholder_rgba8_tex(_ctx: Context, texel_value: &[u8; 4]) ->
             std::mem::transmute(texel_value.as_ptr()),
         );
         Ok(res)
-    })
+    })*/
 }

@@ -1,15 +1,14 @@
-use gl::types::*;
 use regex::Regex;
 use snoozy::Result;
 use std::ffi::CString;
 use std::iter;
 
 pub(crate) fn make_shader(
-    gl: &gl::Gl,
+    gfx: &crate::Gfx,
     shader_type: u32,
     sources: &[shader_prepper::SourceChunk],
 ) -> Result<u32> {
-    unsafe {
+    /*unsafe {
         let handle = gl.CreateShader(shader_type);
 
         let preamble = shader_prepper::SourceChunk {
@@ -92,11 +91,12 @@ pub(crate) fn make_shader(
         } else {
             Ok(handle)
         }
-    }
+    }*/
+    unimplemented!()
 }
 
-pub(crate) fn make_program(gl: &gl::Gl, shaders: &[u32]) -> Result<u32> {
-    unsafe {
+pub(crate) fn make_program(gfx: &crate::Gfx, shaders: &[u32]) -> Result<u32> {
+    /*unsafe {
         let handle = gl.CreateProgram();
         for &shader in shaders.iter() {
             gl.AttachShader(handle, shader);
@@ -127,5 +127,6 @@ pub(crate) fn make_program(gl: &gl::Gl, shaders: &[u32]) -> Result<u32> {
         } else {
             Ok(handle)
         }
-    }
+    }*/
+    unimplemented!()
 }

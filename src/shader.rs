@@ -1,4 +1,4 @@
-use crate::backend::{self, opengl::*, render_buffer::*};
+use crate::backend::{self, render_buffer::*};
 use crate::blob::*;
 use crate::buffer::Buffer;
 use crate::gpu_debugger;
@@ -195,8 +195,9 @@ pub struct ShaderReflection {
     uniforms: HashMap<String, ShaderUniformReflection>,
 }
 
-fn reflect_shader(gl: &gl::Gl, program_handle: u32) -> ShaderReflection {
-    let mut uniform_count = 0i32;
+fn reflect_shader(gfx: &crate::Gfx, program_handle: u32) -> ShaderReflection {
+    unimplemented!()
+    /*let mut uniform_count = 0i32;
     unsafe {
         gl.GetProgramiv(program_handle, gl::ACTIVE_UNIFORMS, &mut uniform_count);
     }
@@ -229,7 +230,7 @@ fn reflect_shader(gl: &gl::Gl, program_handle: u32) -> ShaderReflection {
         })
         .collect();
 
-    ShaderReflection { uniforms }
+    ShaderReflection { uniforms }*/
 }
 
 impl Drop for ComputeShader {
@@ -297,22 +298,23 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         },
     )?;
 
-    with_gl(|gl| {
-        let handle = backend::shader::make_shader(gl, gl::COMPUTE_SHADER, &source)?;
+    /*with_gl(|gl| {
+        let handle = backend::shader::make_shader(gfx, gl::COMPUTE_SHADER, &source)?;
         let name = std::path::Path::new(&path.asset_name)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or("unknown".to_string());
 
-        let handle = backend::shader::make_program(gl, &[handle])?;
-        let reflection = reflect_shader(gl, handle);
+        let handle = backend::shader::make_program(gfx, &[handle])?;
+        let reflection = reflect_shader(gfx, handle);
 
         Ok(ComputeShader {
             handle,
             name,
             reflection,
         })
-    })
+    })*/
+    unimplemented!()
 }
 
 #[snoozy]
@@ -327,17 +329,18 @@ pub async fn load_cs_from_string(
         line_offset: 0,
     }];
 
-    with_gl(|gl| {
-        let handle = backend::shader::make_shader(gl, gl::COMPUTE_SHADER, &source)?;
-        let handle = backend::shader::make_program(gl, &[handle])?;
-        let reflection = reflect_shader(gl, handle);
+    /*with_gl(|gl| {
+        let handle = backend::shader::make_shader(gfx, gl::COMPUTE_SHADER, &source)?;
+        let handle = backend::shader::make_program(gfx, &[handle])?;
+        let reflection = reflect_shader(gfx, handle);
 
         Ok(ComputeShader {
             handle,
             name: name.clone(),
             reflection,
         })
-    })
+    })*/
+    unimplemented!()
 }
 
 pub struct RasterSubShader {
@@ -364,11 +367,12 @@ pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    with_gl(|gl| {
+    /*with_gl(|gl| {
         Ok(RasterSubShader {
-            handle: backend::shader::make_shader(gl, gl::VERTEX_SHADER, &source)?,
+            handle: backend::shader::make_shader(gfx, gl::VERTEX_SHADER, &source)?,
         })
-    })
+    })*/
+    unimplemented!()
 }
 
 #[snoozy]
@@ -382,11 +386,12 @@ pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    with_gl(|gl| {
+    /*with_gl(|gl| {
         Ok(RasterSubShader {
-            handle: backend::shader::make_shader(gl, gl::FRAGMENT_SHADER, &source)?,
+            handle: backend::shader::make_shader(gfx, gl::FRAGMENT_SHADER, &source)?,
         })
-    })
+    })*/
+    unimplemented!()
 }
 
 pub struct RasterPipeline {
@@ -404,12 +409,13 @@ pub async fn make_raster_pipeline(
         shaders.push(ctx.get(&*a).await?.handle);
     }
 
-    with_gl(|gl| {
-        let handle = backend::shader::make_program(gl, shaders.as_slice())?;
-        let reflection = reflect_shader(gl, handle);
+    /*with_gl(|gl| {
+        let handle = backend::shader::make_program(gfx, shaders.as_slice())?;
+        let reflection = reflect_shader(gfx, handle);
 
         Ok(RasterPipeline { handle, reflection })
-    })
+    })*/
+    unimplemented!()
 }
 
 #[derive(Default)]
@@ -431,19 +437,20 @@ pub enum PlumberEvent<'a, 'b> {
 }
 
 pub trait ShaderUniformPlumberCallback {
-    fn plumb(&mut self, gl: &gl::Gl, name: &str, value: &ResolvedShaderUniformValue);
+    fn plumb(&mut self, gfx: &crate::Gfx, name: &str, value: &ResolvedShaderUniformValue);
 }
 
 impl ShaderUniformPlumber {
     fn plumb_uniform(
         &mut self,
-        gl: &gl::Gl,
+        gfx: &crate::Gfx,
         program_handle: u32,
         reflection: &ShaderReflection,
         name: &str,
         value: &ResolvedShaderUniformValue,
     ) {
-        let c_name = std::ffi::CString::new(name.clone()).unwrap();
+        unimplemented!()
+        /*let c_name = std::ffi::CString::new(name.clone()).unwrap();
 
         macro_rules! get_uniform_no_warn {
             () => {
@@ -601,12 +608,12 @@ impl ShaderUniformPlumber {
                     gl.Uniform1i(loc.location, *value as i32);
                 }
             },
-        }
+        }*/
     }
 
     fn plumb<UniformHandlerFn>(
         &mut self,
-        gl: &gl::Gl,
+        gfx: &crate::Gfx,
         program_handle: u32,
         reflection: &ShaderReflection,
         uniforms: &Vec<ResolvedShaderUniformHolder>,
@@ -615,8 +622,8 @@ impl ShaderUniformPlumber {
         UniformHandlerFn: FnMut(&mut dyn ShaderUniformPlumberCallback, PlumberEvent),
     {
         impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32, &ShaderReflection) {
-            fn plumb(&mut self, gl: &gl::Gl, name: &str, value: &ResolvedShaderUniformValue) {
-                self.0.plumb_uniform(gl, self.1, self.2, name, value)
+            fn plumb(&mut self, gfx: &crate::Gfx, name: &str, value: &ResolvedShaderUniformValue) {
+                self.0.plumb_uniform(gfx, self.1, self.2, name, value)
             }
         }
 
@@ -649,7 +656,7 @@ impl ShaderUniformPlumber {
                 ResolvedShaderUniformValue::Bundle(ref bundle)
                 | ResolvedShaderUniformValue::BundleAsset(ref bundle) => {
                     scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(gl, program_handle, reflection, bundle, uniform_handler_fn);
+                    self.plumb(gfx, program_handle, reflection, bundle, uniform_handler_fn);
                     scope_event!(PlumberEvent::LeaveScope);
                 }
                 _ => {}
@@ -665,13 +672,15 @@ pub async fn compute_tex(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let cs = ctx.get(cs).await?;
+    unimplemented!()
+
+    /*let cs = ctx.get(cs).await?;
     let uniforms = resolve(ctx, uniforms.clone()).await?;
 
     let mut uniform_plumber = ShaderUniformPlumber::default();
 
     with_gl(|gl| {
-        let output_tex = backend::texture::create_texture(gl, *key);
+        let output_tex = backend::texture::create_texture(gfx, *key);
 
         let mut img_unit = {
             unsafe {
@@ -685,7 +694,7 @@ pub async fn compute_tex(
                 &uniforms,
                 &mut |plumber, event| {
                     if let PlumberEvent::SetUniform { value, name } = event {
-                        plumber.plumb(gl, name, value)
+                        plumber.plumb(gfx, name, value)
                     }
                 },
             );
@@ -730,7 +739,7 @@ pub async fn compute_tex(
                 &mut work_group_size[0],
             );
 
-            gpu_profiler::profile(gl, &cs.name, || {
+            gpu_profiler::profile(gfx, &cs.name, || {
                 gl.DispatchCompute(
                     (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
                     (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
@@ -749,7 +758,7 @@ pub async fn compute_tex(
         //dbg!(output_tex.texture_id);
 
         Ok(output_tex)
-    })
+    })*/
 }
 
 #[snoozy]
@@ -762,8 +771,9 @@ pub async fn raster_tex(
     let uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
     let raster_pipe = ctx.get(raster_pipe).await?;
 
-    with_gl(|gl| {
-        let output_tex = backend::texture::create_texture(gl, *key);
+    unimplemented!()
+    /*with_gl(|gl| {
+        let output_tex = backend::texture::create_texture(gfx, *key);
         let depth_buffer = create_render_buffer(
             gl,
             RenderBufferKey {
@@ -853,7 +863,7 @@ pub async fn raster_tex(
                             _ => {}
                         }
 
-                        plumber.plumb(gl, name, value)
+                        plumber.plumb(gfx, name, value)
                     }
                     PlumberEvent::EnterScope => {
                         mesh_stack.push(Default::default());
@@ -888,5 +898,5 @@ pub async fn raster_tex(
         }
 
         Ok(output_tex)
-    })
+    })*/
 }

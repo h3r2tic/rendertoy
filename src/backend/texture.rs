@@ -1,13 +1,22 @@
 use super::transient_resource::*;
+use crate::vk;
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct TextureKey {
     pub width: u32,
     pub height: u32,
-    pub format: u32,
+    pub format: i32,
 }
 
 impl TextureKey {
+    pub fn new(width: u32, height: u32, format: vk::Format) -> Self {
+        Self {
+            width,
+            height,
+            format: format.as_raw(),
+        }
+    }
+
     pub fn res_div_round_up(&self, x: u32, y: u32) -> Self {
         let mut res = self.clone();
         res.width = (res.width + x - 1) / x;
@@ -38,9 +47,9 @@ impl TextureKey {
         res
     }
 
-    pub fn with_format(&self, format: u32) -> Self {
+    pub fn with_format(&self, format: vk::Format) -> Self {
         let mut res = self.clone();
-        res.format = format;
+        res.format = format.as_raw();
         res
     }
 }
@@ -61,8 +70,8 @@ pub struct TextureAllocation {
     bindless_handle: u64,
 }
 
-pub fn create_texture(gl: &gl::Gl, key: TextureKey) -> Texture {
-    create_transient(gl, key)
+pub fn create_texture(gfx: &crate::Gfx, key: TextureKey) -> Texture {
+    create_transient(gfx, key)
 }
 
 impl TransientResource for Texture {
@@ -82,8 +91,8 @@ impl TransientResource for Texture {
         }
     }
 
-    fn allocate_payload(gl: &gl::Gl, key: TextureKey) -> TextureAllocation {
-        unsafe {
+    fn allocate_payload(gfx: &crate::Gfx, key: TextureKey) -> TextureAllocation {
+        /*unsafe {
             let mut prev_bound_texture = 0;
             gl.GetIntegerv(gl::TEXTURE_BINDING_2D, &mut prev_bound_texture);
 
@@ -120,6 +129,7 @@ impl TransientResource for Texture {
                 sampler_id,
                 bindless_handle,
             }
-        }
+        }*/
+        unimplemented!()
     }
 }

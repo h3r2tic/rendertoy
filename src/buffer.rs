@@ -1,16 +1,16 @@
 pub use crate::backend::buffer::{Buffer, BufferKey};
-
-use crate::backend::{self, opengl::*};
+use crate::vk;
+use crate::backend::{self};
 
 use snoozy::*;
 use std::mem::size_of;
 
 fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
-    gl: &gl::Gl,
+    gfx: &crate::Gfx,
     _ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
-    let size_of_t = size_of::<T>();
+    /*let size_of_t = size_of::<T>();
 
     let res = backend::buffer::create_buffer(
         gl,
@@ -31,7 +31,8 @@ fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
         gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     }
 
-    Ok(res)
+    Ok(res)*/
+    unimplemented!()
 }
 
 #[snoozy]
@@ -39,7 +40,8 @@ pub async fn upload_buffer<T: Copy + Send + Sync + 'static>(
     ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
-    with_gl(|gl| upload_buffer_impl(gl, ctx, contents))
+    //with_gl(|gl| upload_buffer_impl(gfx, ctx, contents))
+    unimplemented!()
 }
 
 use std::ops::Deref;
@@ -94,12 +96,12 @@ pub fn upload_array_buffer_impl<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    gl: &gl::Gl,
+    gfx: &crate::Gfx,
     _ctx: Context,
     contents: &C,
     texture_format: Option<u32>,
 ) -> Result<Buffer> {
-    let size_of_t = size_of::<T>();
+    /*let size_of_t = size_of::<T>();
 
     let res = backend::buffer::create_buffer(
         gl,
@@ -120,7 +122,8 @@ pub fn upload_array_buffer_impl<
         gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
     }
 
-    Ok(res)
+    Ok(res)*/
+    unimplemented!()
 }
 
 #[snoozy]
@@ -131,7 +134,8 @@ pub async fn upload_array_buffer<
     ctx: Context,
     contents: &C,
 ) -> Result<Buffer> {
-    with_gl(|gl| upload_array_buffer_impl(gl, ctx, contents, None))
+    //with_gl(|gl| upload_array_buffer_impl(gfx, ctx, contents, None))
+    unimplemented!()
 }
 
 #[snoozy]
@@ -141,9 +145,10 @@ pub async fn upload_array_tex_buffer<
 >(
     ctx: Context,
     contents: &C,
-    texture_format: &u32,
+    texture_format: &vk::Format,
 ) -> Result<Buffer> {
-    with_gl(|gl| upload_array_buffer_impl(gl, ctx, contents, Some(*texture_format)))
+    //with_gl(|gl| upload_array_buffer_impl(gfx, ctx, contents, Some(*texture_format)))
+    unimplemented!()
 }
 
 pub fn to_byte_vec<T>(mut v: Vec<T>) -> Vec<u8>

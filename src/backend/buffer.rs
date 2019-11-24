@@ -39,8 +39,8 @@ impl TransientResource for Buffer {
         }
     }
 
-    fn allocate_payload(gl: &gl::Gl, key: BufferKey) -> BufferAllocation {
-        unsafe {
+    fn allocate_payload(gfx: &crate::Gfx, key: BufferKey) -> BufferAllocation {
+        /*unsafe {
             let mut buffer_id = 0;
             gl.GenBuffers(1, &mut buffer_id);
             gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, buffer_id);
@@ -70,10 +70,11 @@ impl TransientResource for Buffer {
                 texture_id: tex.map(|t| t.0),
                 bindless_texture_handle: tex.map(|t| t.1),
             }
-        }
+        }*/
+        unimplemented!()
     }
 }
 
-pub fn create_buffer(gl: &gl::Gl, key: BufferKey) -> Buffer {
-    create_transient(gl, key)
+pub fn create_buffer(gfx: &crate::Gfx, key: BufferKey) -> Buffer {
+    create_transient(gfx, key)
 }
