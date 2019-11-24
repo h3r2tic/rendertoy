@@ -485,11 +485,13 @@ impl Rendertoy {
             // TODO
             let gfx = Gfx {};
             //draw_fullscreen_texture(final_texture, state.window_size_pixels);
-            backend::draw::draw_fullscreen_texture(
+
+            // TODO: copy output to screen
+            /*backend::draw::draw_fullscreen_texture(
                 &gfx,
                 debugged_texture.unwrap_or(final_texture.view),
                 state.window_size_pixels,
-            );
+            );*/
         }
         //);
     }

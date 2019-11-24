@@ -57,7 +57,7 @@ impl TextureKey {
 
 #[derive(Clone)]
 pub struct Texture {
-    image: vk::Image,
+    pub image: vk::Image,
     pub view: vk::ImageView,
     pub key: TextureKey,
     _allocation: SharedTransientAllocation,

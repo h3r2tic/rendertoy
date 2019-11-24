@@ -864,22 +864,24 @@ pub async fn compute_tex(
         };
 
         // TODO: update
-        /*for (img_idx, ds) in descriptor_sets.iter().enumerate() {
+        {
+            let ds = descriptor_sets[0];
+
             let image_info = [vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::GENERAL)
-                .image_view(self.present_image_views[img_idx])
+                .image_view(output_tex.view)
                 .build()];
 
             let image_write = vk::WriteDescriptorSet::builder()
-                .dst_set(*ds)
+                .dst_set(ds)
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&image_info)
                 .build();
 
-            self.device.update_descriptor_sets(&[image_write], &[]);
-        }*/
+            device.update_descriptor_sets(&[image_write], &[]);
+        }
 
         descriptor_sets
     };
@@ -888,10 +890,21 @@ pub async fn compute_tex(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
+        vk_all().record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                output_tex.image,
+                vk_sync::AccessType::Nothing,
+                vk_sync::AccessType::ComputeShaderWrite,
+            )
+            .with_discard(true),
+        );
+
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
 
         // TODO
-        let dynamic_offsets = [0];
+        //let dynamic_offsets = [0];
+        let dynamic_offsets = [];
 
         device.cmd_bind_descriptor_sets(
             cb,
