@@ -844,88 +844,99 @@ pub async fn compute_tex(
 
     let output_tex = backend::texture::create_texture(*key);
 
+    let mut uniform_plumber = ShaderUniformPlumber::default();
+
+    /*
+    let device = vk_device();
+    device.cmd_bind_pipeline(
+        cb,
+        vk::PipelineBindPoint::COMPUTE,
+        cs.pipeline,
+    );
+    device.cmd_bind_descriptor_sets(
+        cb,
+        vk::PipelineBindPoint::COMPUTE,
+        cs.pipeline_layout,
+        0,
+        &[present_descriptor_sets[present_index]],
+        &[],
+    );
+
+    unsafe {
+        gl.UseProgram(cs.handle);
+    }
+
+    uniform_plumber.plumb(
+        gl,
+        cs.handle,
+        &cs.reflection,
+        &uniforms,
+        &mut |plumber, event| {
+            if let PlumberEvent::SetUniform { value, name } = event {
+                plumber.plumb(gfx, name, value)
+            }
+        },
+    );
+
+    for warning in uniform_plumber.warnings.iter() {
+        crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
+    }
+
+    let dispatch_size = (key.width, key.height);
+
+    unsafe {
+        let level = 0;
+        let layered = gl::FALSE;
+        gl.BindImageTexture(
+            img_unit as u32,
+            output_tex.texture_id,
+            level,
+            layered,
+            0,
+            gl::WRITE_ONLY,
+            key.format,
+        );
+        gl.Uniform1i(
+            gl.GetUniformLocation(cs.handle, "outputTex\0".as_ptr() as *const i8),
+            img_unit,
+        );
+        gl.Uniform4f(
+            gl.GetUniformLocation(cs.handle, "outputTex_size\0".as_ptr() as *const i8),
+            dispatch_size.0 as f32,
+            dispatch_size.1 as f32,
+            1f32 / dispatch_size.0 as f32,
+            1f32 / dispatch_size.1 as f32,
+        );
+        img_unit += 1;
+
+        let mut work_group_size: [i32; 3] = [0, 0, 0];
+        gl.GetProgramiv(
+            cs.handle,
+            gl::COMPUTE_WORK_GROUP_SIZE,
+            &mut work_group_size[0],
+        );
+
+        gpu_profiler::profile(gfx, &cs.name, || {
+            gl.DispatchCompute(
+                (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
+                (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
+                1,
+            )
+        });
+
+        for i in 0..img_unit {
+            gl.ActiveTexture(gl::TEXTURE0 + i as u32);
+            gl.BindTexture(gl::TEXTURE_2D, 0);
+        }
+    }
+
+    //dbg!(&cs.name);
+    gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
+    //dbg!(output_tex.texture_id);
+
+    Ok(output_tex)*/
+
     unimplemented!()
-
-    /*let mut uniform_plumber = ShaderUniformPlumber::default();
-
-    with_gl(|gl| {
-        let mut img_unit = {
-            unsafe {
-                gl.UseProgram(cs.handle);
-            }
-
-            uniform_plumber.plumb(
-                gl,
-                cs.handle,
-                &cs.reflection,
-                &uniforms,
-                &mut |plumber, event| {
-                    if let PlumberEvent::SetUniform { value, name } = event {
-                        plumber.plumb(gfx, name, value)
-                    }
-                },
-            );
-            uniform_plumber.img_unit
-        };
-
-        for warning in uniform_plumber.warnings.iter() {
-            crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
-        }
-
-        let dispatch_size = (key.width, key.height);
-
-        unsafe {
-            let level = 0;
-            let layered = gl::FALSE;
-            gl.BindImageTexture(
-                img_unit as u32,
-                output_tex.texture_id,
-                level,
-                layered,
-                0,
-                gl::WRITE_ONLY,
-                key.format,
-            );
-            gl.Uniform1i(
-                gl.GetUniformLocation(cs.handle, "outputTex\0".as_ptr() as *const i8),
-                img_unit,
-            );
-            gl.Uniform4f(
-                gl.GetUniformLocation(cs.handle, "outputTex_size\0".as_ptr() as *const i8),
-                dispatch_size.0 as f32,
-                dispatch_size.1 as f32,
-                1f32 / dispatch_size.0 as f32,
-                1f32 / dispatch_size.1 as f32,
-            );
-            img_unit += 1;
-
-            let mut work_group_size: [i32; 3] = [0, 0, 0];
-            gl.GetProgramiv(
-                cs.handle,
-                gl::COMPUTE_WORK_GROUP_SIZE,
-                &mut work_group_size[0],
-            );
-
-            gpu_profiler::profile(gfx, &cs.name, || {
-                gl.DispatchCompute(
-                    (dispatch_size.0 + work_group_size[0] as u32 - 1) / work_group_size[0] as u32,
-                    (dispatch_size.1 + work_group_size[1] as u32 - 1) / work_group_size[1] as u32,
-                    1,
-                )
-            });
-
-            for i in 0..img_unit {
-                gl.ActiveTexture(gl::TEXTURE0 + i as u32);
-                gl.BindTexture(gl::TEXTURE_2D, 0);
-            }
-        }
-
-        //dbg!(&cs.name);
-        gpu_debugger::report_texture(&cs.name, output_tex.texture_id);
-        //dbg!(output_tex.texture_id);
-
-        Ok(output_tex)
-    })*/
 }
 
 #[snoozy]

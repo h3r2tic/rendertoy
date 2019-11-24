@@ -37,7 +37,90 @@ pub struct VkCommandBufferData {
     pool: vk::CommandPool,
 }
 
+pub struct LinearUniformBuffer {
+    write_head: std::sync::atomic::AtomicUsize,
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    size: vk::DeviceSize,
+    mapped_ptr: *mut u8,
+    min_offset_alignment: usize,
+}
+
+unsafe impl Send for LinearUniformBuffer {}
+unsafe impl Sync for LinearUniformBuffer {}
+
+impl LinearUniformBuffer {
+    fn new(
+        size: vk::DeviceSize,
+        device: &Device,
+        device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
+        min_offset_alignment: usize,
+    ) -> Self {
+        let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::UNIFORM_BUFFER;
+        let memory_properties: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::HOST_VISIBLE;
+
+        unsafe {
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(size)
+                .usage(usage)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .build();
+
+            let buffer = device.create_buffer(&buffer_info, None).unwrap();
+
+            let memory_req = device.get_buffer_memory_requirements(buffer);
+
+            let memory_index =
+                find_memorytype_index(&memory_req, device_memory_properties, memory_properties)
+                    .unwrap();
+
+            let allocate_info = vk::MemoryAllocateInfo {
+                allocation_size: memory_req.size,
+                memory_type_index: memory_index,
+                ..Default::default()
+            };
+
+            let memory = device.allocate_memory(&allocate_info, None).unwrap();
+
+            device.bind_buffer_memory(buffer, memory, 0).unwrap();
+
+            let mapped_ptr: *mut u8 = device
+                .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
+                .unwrap() as *mut u8;
+
+            Self {
+                write_head: std::sync::atomic::AtomicUsize::new(0),
+                buffer,
+                memory,
+                size,
+                mapped_ptr,
+                min_offset_alignment,
+            }
+        }
+    }
+
+    pub fn allocate(&self, bytes_count: usize) -> snoozy::Result<&[u8]> {
+        unsafe {
+            let alloc_size =
+                (bytes_count + self.min_offset_alignment - 1) & self.min_offset_alignment;
+            let start_offset = self
+                .write_head
+                .fetch_add(alloc_size, std::sync::atomic::Ordering::Relaxed);
+
+            if start_offset + bytes_count <= self.size as usize {
+                Ok(std::slice::from_raw_parts(
+                    self.mapped_ptr.offset(start_offset as isize),
+                    bytes_count,
+                ))
+            } else {
+                bail!("Out of memory in LinearUniformBuffer::allocate")
+            }
+        }
+    }
+}
+
 pub struct VkFrameData {
+    pub uniforms: LinearUniformBuffer,
     pub descriptor_pool: Mutex<vk::DescriptorPool>,
     pub command_buffer: Mutex<VkCommandBufferData>,
     pub present_image: vk::Image,
@@ -49,6 +132,7 @@ pub struct VkKitchenSink {
     pub entry: Entry,
     pub instance: Instance,
     pub device: Device,
+    pub device_properties: vk::PhysicalDeviceProperties,
     pub surface_loader: Surface,
     pub swapchain_loader: Swapchain,
     pub debug_report_loader: DebugReport,
@@ -217,7 +301,9 @@ impl VkKitchenSink {
                 .filter_map(|v| v)
                 .nth(0)
                 .expect("Couldn't find suitable device.");
+
             let present_queue_family_index = present_queue_family_index as u32;
+            let device_properties = instance.get_physical_device_properties(pdevice);
 
             let device_extension_names_raw = vec![
                 Swapchain::name().as_ptr(),
@@ -376,15 +462,24 @@ impl VkKitchenSink {
             let rendering_complete_semaphores = create_swapchain_semaphores();
 
             let frame_data = (0..present_images.len())
-                .map(|i| VkFrameData {
-                    descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
-                    command_buffer: Mutex::new(allocate_frame_command_buffer(
+                .map(|i| {
+                    let uniforms = LinearUniformBuffer::new(
+                        1 << 20,
                         &device,
-                        present_queue_family_index,
-                    )),
-                    present_image: present_images[i],
-                    present_image_view: present_image_views[i],
-                    rendering_complete_semaphore: rendering_complete_semaphores[i],
+                        &device_memory_properties,
+                        device_properties.limits.min_uniform_buffer_offset_alignment as usize,
+                    );
+                    VkFrameData {
+                        uniforms,
+                        descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
+                        command_buffer: Mutex::new(allocate_frame_command_buffer(
+                            &device,
+                            present_queue_family_index,
+                        )),
+                        present_image: present_images[i],
+                        present_image_view: present_image_views[i],
+                        rendering_complete_semaphore: rendering_complete_semaphores[i],
+                    }
                 })
                 .collect();
 
@@ -392,6 +487,7 @@ impl VkKitchenSink {
                 entry,
                 instance,
                 device,
+                device_properties,
                 present_queue_family_index,
                 pdevice,
                 device_memory_properties,
@@ -580,7 +676,45 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
     }
 }
 
+pub fn find_memorytype_index(
+    memory_req: &vk::MemoryRequirements,
+    memory_prop: &vk::PhysicalDeviceMemoryProperties,
+    flags: vk::MemoryPropertyFlags,
+) -> Option<u32> {
+    // Try to find an exactly matching memory flag
+    let best_suitable_index =
+        find_memorytype_index_f(memory_req, memory_prop, flags, |property_flags, flags| {
+            property_flags == flags
+        });
+    if best_suitable_index.is_some() {
+        return best_suitable_index;
+    }
+    // Otherwise find a memory flag that works
+    find_memorytype_index_f(memory_req, memory_prop, flags, |property_flags, flags| {
+        property_flags & flags == flags
+    })
+}
+
+pub fn find_memorytype_index_f<F: Fn(vk::MemoryPropertyFlags, vk::MemoryPropertyFlags) -> bool>(
+    memory_req: &vk::MemoryRequirements,
+    memory_prop: &vk::PhysicalDeviceMemoryProperties,
+    flags: vk::MemoryPropertyFlags,
+    f: F,
+) -> Option<u32> {
+    let mut memory_type_bits = memory_req.memory_type_bits;
+    for (index, ref memory_type) in memory_prop.memory_types.iter().enumerate() {
+        if memory_type_bits & 1 == 1 {
+            if f(memory_type.property_flags, flags) {
+                return Some(index as u32);
+            }
+        }
+        memory_type_bits = memory_type_bits >> 1;
+    }
+    None
+}
+
 static mut VK_KITCHEN_SINK: Option<VkKitchenSink> = None;
+static mut VK_CURRENT_FRAME_DATA_IDX: usize = 0;
 
 pub fn initialize_vk_state(vk: VkKitchenSink) {
     unsafe {
@@ -592,6 +726,16 @@ pub fn vk_device() -> &'static Device {
     unsafe { std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().device) }
 }
 
+pub unsafe fn vk_begin_frame(vk: VkKitchenSink, data_idx: usize) {
+    unsafe {
+        VK_CURRENT_FRAME_DATA_IDX = data_idx;
+    }
+}
+
 pub unsafe fn vk_all() -> &'static VkKitchenSink {
     std::mem::transmute(VK_KITCHEN_SINK.as_ref().unwrap())
+}
+
+pub unsafe fn vk_frame() -> &'static VkFrameData {
+    std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().frame_data[VK_CURRENT_FRAME_DATA_IDX])
 }

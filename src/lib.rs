@@ -692,8 +692,13 @@ impl Rendertoy {
         let mut running = true;
         while running {
             // TODO: reset descriptor pool for the current frame
+            // TODO: reset atomics in dynamic uniform buffers
+            // TODO: vk_begin_frame(present_image_index);
 
             self.draw_with_frame_snapshot(&mut callback);
+
+            // TODO: flush mapped uniform buffer ranges
+            // TODO: submit main command buffer
 
             //with_gl_and_context(|gl, windowed_context|
             {
