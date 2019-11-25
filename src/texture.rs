@@ -2,6 +2,7 @@ pub use crate::backend::texture::{Texture, TextureKey};
 
 use crate::backend::{self};
 use crate::blob::{load_blob, AssetPath, Blob};
+pub use ash::{vk, vk::Format};
 
 use snoozy::*;
 
@@ -100,7 +101,10 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
         ),
         _ => Err(format_err!("Unsupported image format")),
     }*/
-    unimplemented!()
+    //unimplemented!()
+
+    // TODO
+    Ok(backend::texture::create_texture(TextureKey::new(1, 1, Format::R8_UNORM)))
 }
 
 fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
