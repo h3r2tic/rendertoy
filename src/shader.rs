@@ -377,6 +377,14 @@ fn generate_descriptor_set_layouts(
                         .binding(binding.binding)
                         .build(),
                 ),
+                ReflectDescriptorType::SampledImage => bindings.push(
+                    vk::DescriptorSetLayoutBinding::builder()
+                        .descriptor_count(binding.count)
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                        .binding(binding.binding)
+                        .build(),
+                ),
                 _ => print!("\tunsupported"),
             }
         }
@@ -877,6 +885,17 @@ fn update_descriptor_sets(
                                 | ResolvedShaderUniformValue::Float32Asset(value) => {
                                     dst_mem.copy_from_slice(&(*value).to_ne_bytes());
                                 }
+                                ResolvedShaderUniformValue::Int32(value) => {
+                                    dst_mem.copy_from_slice(&(*value).to_ne_bytes());
+                                }
+                                ResolvedShaderUniformValue::Ivec2(value) => {
+                                    dst_mem.copy_from_slice(unsafe {
+                                        std::slice::from_raw_parts(
+                                            std::mem::transmute(&value.0 as *const i32),
+                                            2 * 4,
+                                        )
+                                    });
+                                }
                                 ResolvedShaderUniformValue::Vec4(value) => {
                                     dst_mem.copy_from_slice(unsafe {
                                         std::slice::from_raw_parts(
@@ -908,6 +927,26 @@ fn update_descriptor_sets(
                             .buffer_info(&buffer_info)
                             .build(),
                     );
+                }
+                ReflectDescriptorType::SampledImage => {
+                    if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =
+                        uniforms.get(&binding.name)
+                    {
+                        let image_info = [vk::DescriptorImageInfo::builder()
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                            .image_view(value.view)
+                            .build()];
+
+                        ds_writes.push(
+                            vk::WriteDescriptorSet::builder()
+                                .dst_set(ds)
+                                .dst_binding(binding.binding)
+                                .dst_array_element(0)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                .image_info(&image_info)
+                                .build(),
+                        )
+                    }
                 }
                 ReflectDescriptorType::StorageImage => {
                     if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =

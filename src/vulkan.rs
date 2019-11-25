@@ -190,6 +190,10 @@ impl ImageBarrier {
 fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
     let descriptor_sizes = [
         vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
+            descriptor_count: 1 << 20,
+        },
+        vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
             descriptor_count: 1 << 20,
         },
