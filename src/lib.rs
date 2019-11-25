@@ -494,7 +494,7 @@ impl Rendertoy {
             );*/
         }
         //);
-        // 
+        //
         final_texture
     }
 
@@ -703,18 +703,20 @@ impl Rendertoy {
             vk.device
                 .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::builder()
-                        .bindings(&[vk::DescriptorSetLayoutBinding::builder()
-                            .descriptor_count(1)
-                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                            .binding(0)
-                            .build(), 
+                        .bindings(&[
                             vk::DescriptorSetLayoutBinding::builder()
-                            .descriptor_count(1)
-                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                            .binding(1)
-                            .build()])
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(0)
+                                .build(),
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(1)
+                                .build(),
+                        ])
                         .build(),
                     None,
                 )
@@ -804,7 +806,7 @@ impl Rendertoy {
                             ],
                             &[],
                         );
-        
+
                         vk.device.cmd_bind_pipeline(
                             cb,
                             vk::PipelineBindPoint::COMPUTE,
@@ -974,7 +976,7 @@ fn create_present_compute_pipeline(
     use std::io::Cursor;
 
     let shader_entry_name = CString::new("main").unwrap();
-    let mut shader_spv = Cursor::new(&include_bytes!("copy_image.spv")[..]);
+    let mut shader_spv = Cursor::new(&include_bytes!("final_blit.spv")[..]);
     let shader_code = ash::util::read_spv(&mut shader_spv).expect("Failed to read shader spv");
 
     let descriptor_set_layouts = [descriptor_set_layout];

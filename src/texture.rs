@@ -70,12 +70,128 @@ where
 }
 
 fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
-    use image::{DynamicImage, GenericImageView};
+    use crate::vulkan::*;
+    use ash::util::Align;
+    use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+    use image::{DynamicImage, GenericImageView, ImageBuffer};
 
-    let img = image::load_from_memory(&blob.contents)?;
+    let device = vk_device();
 
-    let dims = img.dimensions();
-    println!("Loaded image: {:?} {:?}", dims, img.color());
+    let image = image::load_from_memory(&blob.contents)?;
+    let image_dimensions = image.dimensions();
+    println!("Loaded image: {:?} {:?}", image_dimensions, image.color());
+
+    // TODO: don't
+    let image = image.to_rgba();
+    let internal_format = if params.gamma == TexGamma::Linear {
+        vk::Format::R8G8B8A8_UNORM
+    } else {
+        vk::Format::R8G8B8A8_SRGB
+    };
+
+    let image_data = image.into_raw();
+    let image_buffer_info = vk::BufferCreateInfo {
+        size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
+        usage: vk::BufferUsageFlags::TRANSFER_SRC,
+        sharing_mode: vk::SharingMode::EXCLUSIVE,
+        ..Default::default()
+    };
+    let image_buffer = unsafe { device.create_buffer(&image_buffer_info, None).unwrap() };
+    let image_buffer_memory_req = unsafe { device.get_buffer_memory_requirements(image_buffer) };
+    let image_buffer_memory_index = find_memorytype_index(
+        &image_buffer_memory_req,
+        &unsafe { vk_all().device_memory_properties },
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )
+    .expect("Unable to find suitable memorytype for the vertex buffer.");
+
+    let image_buffer_allocate_info = vk::MemoryAllocateInfo {
+        allocation_size: image_buffer_memory_req.size,
+        memory_type_index: image_buffer_memory_index,
+        ..Default::default()
+    };
+
+    unsafe {
+        let image_buffer_memory = device
+            .allocate_memory(&image_buffer_allocate_info, None)
+            .unwrap();
+        let image_ptr = unsafe {
+            device.map_memory(
+                image_buffer_memory,
+                0,
+                image_buffer_memory_req.size,
+                vk::MemoryMapFlags::empty(),
+            )
+        }
+        .unwrap();
+        let mut image_slice = Align::new(
+            image_ptr,
+            std::mem::align_of::<u8>() as u64,
+            image_buffer_memory_req.size,
+        );
+
+        image_slice.copy_from_slice(&image_data);
+        device.unmap_memory(image_buffer_memory);
+        device
+            .bind_buffer_memory(image_buffer, image_buffer_memory, 0)
+            .unwrap();
+    }
+
+    let res = backend::texture::create_texture(TextureKey {
+        width: image_dimensions.0,
+        height: image_dimensions.1,
+        format: internal_format.as_raw(),
+    });
+
+    {
+        let vk_frame = unsafe { vk_frame() };
+        let cb = vk_frame.command_buffer.lock().unwrap();
+        let cb: vk::CommandBuffer = cb.cb;
+
+        unsafe {
+            vk_all().record_image_barrier(
+                cb,
+                ImageBarrier::new(
+                    res.image,
+                    vk_sync::AccessType::Nothing,
+                    vk_sync::AccessType::TransferWrite,
+                )
+                .with_discard(true),
+            )
+        };
+
+        let buffer_copy_regions = vk::BufferImageCopy::builder()
+            .image_subresource(
+                vk::ImageSubresourceLayers::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .layer_count(1)
+                    .build(),
+            )
+            .image_extent(vk::Extent3D {
+                width: image_dimensions.0,
+                height: image_dimensions.1,
+                depth: 1,
+            });
+
+        unsafe {
+            device.cmd_copy_buffer_to_image(
+                cb,
+                image_buffer,
+                res.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[buffer_copy_regions.build()],
+            );
+
+            vk_all().record_image_barrier(
+                cb,
+                ImageBarrier::new(
+                    res.image,
+                    vk_sync::AccessType::TransferWrite,
+                    vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+                ),
+            )
+        };
+    }
 
     /*match img {
         DynamicImage::ImageLuma8(ref img) => make_gl_tex(img, dims, gl::R8, gl::RED),
@@ -101,10 +217,8 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
         ),
         _ => Err(format_err!("Unsupported image format")),
     }*/
-    //unimplemented!()
 
-    // TODO
-    Ok(backend::texture::create_texture(TextureKey::new(1, 1, Format::R8_UNORM)))
+    Ok(res)
 }
 
 fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {

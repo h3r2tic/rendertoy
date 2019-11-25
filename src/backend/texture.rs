@@ -183,7 +183,9 @@ impl TransientResource for Texture {
                 .depth(1)
                 .build(),
             vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
         img.create_view(
@@ -197,8 +199,6 @@ impl TransientResource for Texture {
                 layer_count: 1,
             },
         );
-
-        // TODO: sampler
 
         img
         /*unsafe {
