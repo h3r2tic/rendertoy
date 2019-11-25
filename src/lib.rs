@@ -424,7 +424,7 @@ impl Rendertoy {
             .or(self.locked_debug_name.as_ref())
     }
 
-    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F)
+    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F) -> Texture
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
@@ -494,6 +494,8 @@ impl Rendertoy {
             );*/
         }
         //);
+        // 
+        final_texture
     }
 
     /*fn draw_profiling_stats(
@@ -703,9 +705,15 @@ impl Rendertoy {
                     &vk::DescriptorSetLayoutCreateInfo::builder()
                         .bindings(&[vk::DescriptorSetLayoutBinding::builder()
                             .descriptor_count(1)
-                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                             .stage_flags(vk::ShaderStageFlags::COMPUTE)
                             .binding(0)
+                            .build(), 
+                            vk::DescriptorSetLayoutBinding::builder()
+                            .descriptor_count(1)
+                            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                            .binding(1)
                             .build()])
                         .build(),
                     None,
@@ -768,9 +776,35 @@ impl Rendertoy {
                         .with_discard(true),
                     );
 
-                    self.draw_with_frame_snapshot(&mut callback);
+                    let final_texture = self.draw_with_frame_snapshot(&mut callback);
 
                     unsafe {
+                        vk.device.update_descriptor_sets(
+                            &[
+                                vk::WriteDescriptorSet::builder()
+                                    .dst_set(present_descriptor_sets[present_index])
+                                    .dst_binding(0)
+                                    .dst_array_element(0)
+                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                    .image_info(&[vk::DescriptorImageInfo::builder()
+                                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                        .image_view(final_texture.view)
+                                        .build()])
+                                    .build(),
+                                vk::WriteDescriptorSet::builder()
+                                    .dst_set(present_descriptor_sets[present_index])
+                                    .dst_binding(1)
+                                    .dst_array_element(0)
+                                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                    .image_info(&[vk::DescriptorImageInfo::builder()
+                                        .image_layout(vk::ImageLayout::GENERAL)
+                                        .image_view(vk_frame.present_image_view)
+                                        .build()])
+                                    .build(),
+                            ],
+                            &[],
+                        );
+        
                         vk.device.cmd_bind_pipeline(
                             cb,
                             vk::PipelineBindPoint::COMPUTE,
@@ -940,7 +974,7 @@ fn create_present_compute_pipeline(
     use std::io::Cursor;
 
     let shader_entry_name = CString::new("main").unwrap();
-    let mut shader_spv = Cursor::new(&include_bytes!("../comp.spv")[..]);
+    let mut shader_spv = Cursor::new(&include_bytes!("copy_image.spv")[..]);
     let shader_code = ash::util::read_spv(&mut shader_spv).expect("Failed to read shader spv");
 
     let descriptor_set_layouts = [descriptor_set_layout];

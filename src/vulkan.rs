@@ -517,10 +517,16 @@ impl VkKitchenSink {
         descriptor_set_layout: vk::DescriptorSetLayout,
     ) -> Vec<vk::DescriptorSet> {
         unsafe {
-            let descriptor_sizes = [vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: self.frame_data.len() as u32,
-            }];
+            let descriptor_sizes = [
+                vk::DescriptorPoolSize {
+                    ty: vk::DescriptorType::SAMPLED_IMAGE,
+                    descriptor_count: self.frame_data.len() as u32,
+                },
+                vk::DescriptorPoolSize {
+                    ty: vk::DescriptorType::STORAGE_IMAGE,
+                    descriptor_count: self.frame_data.len() as u32,
+                },
+            ];
 
             let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
                 .pool_sizes(&descriptor_sizes)
@@ -540,23 +546,6 @@ impl VkKitchenSink {
                         .build(),
                 )
                 .unwrap();
-
-            for (img_idx, ds) in descriptor_sets.iter().enumerate() {
-                let image_info = [vk::DescriptorImageInfo::builder()
-                    .image_layout(vk::ImageLayout::GENERAL)
-                    .image_view(self.frame_data[img_idx].present_image_view)
-                    .build()];
-
-                let image_write = vk::WriteDescriptorSet::builder()
-                    .dst_set(*ds)
-                    .dst_binding(0)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                    .image_info(&image_info)
-                    .build();
-
-                self.device.update_descriptor_sets(&[image_write], &[]);
-            }
 
             descriptor_sets
         }

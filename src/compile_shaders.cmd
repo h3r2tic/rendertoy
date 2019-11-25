@@ -1,0 +1,1 @@
+C:\coding\ext\spirv-reflect-rs\examples\dxc.exe copy_image.hlsl -T cs_6_3 -spirv -fvk-u-shift 1 0 -Fo copy_image.spv

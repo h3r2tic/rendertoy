@@ -1020,6 +1020,15 @@ pub async fn compute_tex(
 
         // TODO: find group size
         device.cmd_dispatch(cb, dispatch_size.0 / 8, dispatch_size.1 / 8, 1);
+
+        vk_all().record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                output_tex.image,
+                vk_sync::AccessType::ComputeShaderWrite,
+                vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            ),
+        );
     }
 
     /*for warning in uniform_plumber.warnings.iter() {
