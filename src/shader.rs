@@ -76,6 +76,7 @@ def_shader_uniform_types! {
     Uint32(u32),
     Int32(i32),
     Ivec2((i32, i32)),
+    Vec4((f32, f32, f32, f32)),
     Bundle(ShaderUniformBundle),
     Float32Asset(SnoozyRef<f32>),
     Uint32Asset(SnoozyRef<u32>),
@@ -596,21 +597,17 @@ struct ShaderUniformPlumber {
     warnings: Vec<String>,
 }
 
-pub enum PlumberEvent<'a, 'b> {
+pub enum PlumberEvent {
     SetUniform {
-        name: &'a str,
-        value: &'b ResolvedShaderUniformValue,
+        name: String,
+        value: ResolvedShaderUniformValue,
     },
     EnterScope,
     LeaveScope,
 }
 
-pub trait ShaderUniformPlumberCallback {
-    fn plumb(&mut self, gfx: &crate::Gfx, name: &str, value: &ResolvedShaderUniformValue);
-}
-
 impl ShaderUniformPlumber {
-    fn plumb_uniform(
+    /*fn plumb_uniform(
         &mut self,
         gfx: &crate::Gfx,
         program_handle: u32,
@@ -778,60 +775,170 @@ impl ShaderUniformPlumber {
                 }
             },
         }*/
+    }*/
+}
+
+fn flatten_uniforms(
+    mut uniforms: Vec<ResolvedShaderUniformHolder>,
+    sink: &mut impl FnMut(PlumberEvent),
+) {
+    macro_rules! scope_event {
+        ($event_type: expr) => {
+            uniform_handler_fn($event_type);
+        };
     }
 
-    fn plumb<UniformHandlerFn>(
-        &mut self,
-        gfx: &crate::Gfx,
-        program_handle: u32,
-        reflection: &ShaderReflection,
-        uniforms: &Vec<ResolvedShaderUniformHolder>,
-        uniform_handler_fn: &mut UniformHandlerFn,
-    ) where
-        UniformHandlerFn: FnMut(&mut dyn ShaderUniformPlumberCallback, PlumberEvent),
-    {
-        impl ShaderUniformPlumberCallback for (&mut ShaderUniformPlumber, u32, &ShaderReflection) {
-            fn plumb(&mut self, gfx: &crate::Gfx, name: &str, value: &ResolvedShaderUniformValue) {
-                self.0.plumb_uniform(gfx, self.1, self.2, name, value)
+    // Do non-bundle values first so that they become visible to bundle handlers
+    for uniform in uniforms.iter_mut() {
+        match uniform.value {
+            ResolvedShaderUniformValue::Bundle(_) => {}
+            ResolvedShaderUniformValue::BundleAsset(_) => {}
+            ResolvedShaderUniformValue::TextureAsset(_) => {
+                let name = std::mem::replace(&mut uniform.name, String::new());
+                let value = if let ResolvedShaderUniformValue::TextureAsset(value) =
+                    std::mem::replace(&mut uniform.value, ResolvedShaderUniformValue::Int32(0))
+                {
+                    value
+                } else {
+                    panic!()
+                };
+
+                let tex_size_uniform = (
+                    value.key.width as f32,
+                    value.key.height as f32,
+                    1f32 / value.key.width as f32,
+                    1f32 / value.key.height as f32,
+                );
+
+                sink(PlumberEvent::SetUniform {
+                    name: name.clone() + "_size",
+                    value: ResolvedShaderUniformValue::Vec4(tex_size_uniform),
+                });
+
+                sink(PlumberEvent::SetUniform {
+                    name,
+                    value: ResolvedShaderUniformValue::TextureAsset(value),
+                });
+            }
+            _ => {
+                let name = std::mem::replace(&mut uniform.name, String::new());
+                let value =
+                    std::mem::replace(&mut uniform.value, ResolvedShaderUniformValue::Int32(0));
+
+                sink(PlumberEvent::SetUniform { name, value });
             }
         }
+    }
 
-        macro_rules! scope_event {
-            ($event_type: expr) => {
-                uniform_handler_fn(&mut (&mut *self, program_handle, reflection), $event_type);
-            };
+    // Now process bundles
+    for uniform in uniforms.into_iter() {
+        match uniform.value {
+            ResolvedShaderUniformValue::Bundle(bundle)
+            | ResolvedShaderUniformValue::BundleAsset(bundle) => {
+                sink(PlumberEvent::EnterScope);
+                flatten_uniforms(bundle, sink);
+                sink(PlumberEvent::LeaveScope);
+            }
+            _ => {}
         }
+    }
+}
 
-        // Do non-bundle values first so that they become visible to bundle handlers
-        for uniform in uniforms.iter() {
-            match uniform.value {
-                ResolvedShaderUniformValue::Bundle(_) => {}
-                ResolvedShaderUniformValue::BundleAsset(_) => {}
-                _ => {
-                    uniform_handler_fn(
-                        &mut (&mut *self, program_handle, reflection),
-                        PlumberEvent::SetUniform {
-                            name: &uniform.name,
-                            value: &uniform.value,
-                        },
+fn update_descriptor_sets(
+    device: &Device,
+    refl: &spirv_reflect::ShaderModule,
+    descriptor_sets: &[vk::DescriptorSet],
+    uniforms: &HashMap<String, ResolvedShaderUniformValue>,
+) -> std::result::Result<Vec<u32>, &'static str> {
+    let mut ds_writes = Vec::new();
+    let mut ds_offsets = Vec::new();
+
+    let entry = Some("main");
+    for (ds_idx, descriptor_set) in refl.enumerate_descriptor_sets(entry)?.iter().enumerate() {
+        let ds = descriptor_sets[0];
+        for binding in descriptor_set.bindings.iter() {
+            use spirv_reflect::types::descriptor::ReflectDescriptorType;
+
+            match binding.descriptor_type {
+                ReflectDescriptorType::UniformBuffer => {
+                    let buffer_bytes = binding.block.size as usize;
+                    let (buffer_handle, buffer_offset, buffer_contents) = unsafe { vk_frame() }
+                        .uniforms
+                        .allocate(buffer_bytes)
+                        .expect("failed to allocate uniform buffer");
+
+                    for member in binding.block.members.iter() {
+                        if let Some(value) = uniforms.get(&member.name) {
+                            let dst_mem = &mut buffer_contents[member.absolute_offset as usize
+                                ..(member.absolute_offset + member.size) as usize];
+
+                            match value {
+                                ResolvedShaderUniformValue::Float32(value)
+                                | ResolvedShaderUniformValue::Float32Asset(value) => {
+                                    dst_mem.copy_from_slice(&(*value).to_ne_bytes());
+                                }
+                                ResolvedShaderUniformValue::Vec4(value) => {
+                                    dst_mem.copy_from_slice(unsafe {
+                                        std::slice::from_raw_parts(
+                                            std::mem::transmute(&value.0 as *const f32),
+                                            4 * 4,
+                                        )
+                                    });
+                                }
+                                _ => {
+                                    dbg!(member);
+                                    unimplemented!();
+                                }
+                            }
+                        }
+                    }
+
+                    let buffer_info = [vk::DescriptorBufferInfo::builder()
+                        .buffer(buffer_handle)
+                        .range(buffer_bytes as u64)
+                        .build()];
+
+                    ds_offsets.push(buffer_offset as u32);
+                    ds_writes.push(
+                        vk::WriteDescriptorSet::builder()
+                            .dst_set(ds)
+                            .dst_binding(binding.binding)
+                            .dst_array_element(0)
+                            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                            .buffer_info(&buffer_info)
+                            .build(),
                     );
                 }
-            }
-        }
+                ReflectDescriptorType::StorageImage => {
+                    if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =
+                        uniforms.get(&binding.name)
+                    {
+                        let image_info = [vk::DescriptorImageInfo::builder()
+                            .image_layout(vk::ImageLayout::GENERAL)
+                            .image_view(value.view)
+                            .build()];
 
-        // Now process bundles
-        for uniform in uniforms.iter() {
-            match uniform.value {
-                ResolvedShaderUniformValue::Bundle(ref bundle)
-                | ResolvedShaderUniformValue::BundleAsset(ref bundle) => {
-                    scope_event!(PlumberEvent::EnterScope);
-                    self.plumb(gfx, program_handle, reflection, bundle, uniform_handler_fn);
-                    scope_event!(PlumberEvent::LeaveScope);
+                        ds_writes.push(
+                            vk::WriteDescriptorSet::builder()
+                                .dst_set(ds)
+                                .dst_binding(binding.binding)
+                                .dst_array_element(0)
+                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                .image_info(&image_info)
+                                .build(),
+                        )
+                    }
                 }
-                _ => {}
+                _ => print!("\tunsupported"),
             }
         }
     }
+
+    if !ds_writes.is_empty() {
+        unsafe { device.update_descriptor_sets(&ds_writes, &[]) };
+    }
+
+    Ok(ds_offsets)
 }
 
 #[snoozy]
@@ -841,16 +948,27 @@ pub async fn compute_tex(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let cs = ctx.get(cs).await?;
-    let uniforms = resolve(ctx, uniforms.clone()).await?;
     let output_tex = backend::texture::create_texture(*key);
 
-    let mut uniform_plumber = ShaderUniformPlumber::default();
+    let cs = ctx.get(cs).await?;
+    let mut uniforms = resolve(ctx, uniforms.clone()).await?;
+
+    uniforms.push(ResolvedShaderUniformHolder {
+        name: "outputTex".to_owned(),
+        value: ResolvedShaderUniformValue::TextureAsset(output_tex.clone()),
+    });
 
     let device = vk_device();
     let vk_frame = unsafe { vk_frame() };
 
-    let descriptor_sets = unsafe {
+    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
+    flatten_uniforms(uniforms, &mut |e| {
+        if let PlumberEvent::SetUniform { name, value } = e {
+            flattened_uniforms.insert(name, value);
+        }
+    });
+
+    let (descriptor_sets, dynamic_offsets) = unsafe {
         let descriptor_sets = {
             let descriptor_pool = *vk_frame.descriptor_pool.lock().unwrap();
             let sets = device.allocate_descriptor_sets(
@@ -863,27 +981,15 @@ pub async fn compute_tex(
             sets
         };
 
-        // TODO: update
-        {
-            let ds = descriptor_sets[0];
+        let dynamic_offsets = update_descriptor_sets(
+            device,
+            &cs.spirv_reflection,
+            &descriptor_sets,
+            &flattened_uniforms,
+        )
+        .unwrap();
 
-            let image_info = [vk::DescriptorImageInfo::builder()
-                .image_layout(vk::ImageLayout::GENERAL)
-                .image_view(output_tex.view)
-                .build()];
-
-            let image_write = vk::WriteDescriptorSet::builder()
-                .dst_set(ds)
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(&image_info)
-                .build();
-
-            device.update_descriptor_sets(&[image_write], &[]);
-        }
-
-        descriptor_sets
+        (descriptor_sets, dynamic_offsets)
     };
 
     let cb = vk_frame.command_buffer.lock().unwrap();
@@ -901,11 +1007,6 @@ pub async fn compute_tex(
         );
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
-
-        // TODO
-        //let dynamic_offsets = [0];
-        let dynamic_offsets = [];
-
         device.cmd_bind_descriptor_sets(
             cb,
             vk::PipelineBindPoint::COMPUTE,
@@ -921,19 +1022,7 @@ pub async fn compute_tex(
         device.cmd_dispatch(cb, dispatch_size.0 / 8, dispatch_size.1 / 8, 1);
     }
 
-    /*uniform_plumber.plumb(
-        gl,
-        cs.handle,
-        &cs.reflection,
-        &uniforms,
-        &mut |plumber, event| {
-            if let PlumberEvent::SetUniform { value, name } = event {
-                plumber.plumb(gfx, name, value)
-            }
-        },
-    );
-
-    for warning in uniform_plumber.warnings.iter() {
+    /*for warning in uniform_plumber.warnings.iter() {
         crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
     }*/
 

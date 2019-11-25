@@ -99,7 +99,7 @@ impl LinearUniformBuffer {
         }
     }
 
-    pub fn allocate(&self, bytes_count: usize) -> snoozy::Result<(u64, &[u8])> {
+    pub fn allocate(&self, bytes_count: usize) -> snoozy::Result<(vk::Buffer, u64, &mut [u8])> {
         unsafe {
             let alloc_size =
                 (bytes_count + self.min_offset_alignment - 1) & self.min_offset_alignment;
@@ -109,8 +109,9 @@ impl LinearUniformBuffer {
 
             if start_offset + bytes_count <= self.size as usize {
                 Ok((
+                    self.buffer,
                     start_offset as u64,
-                    std::slice::from_raw_parts(
+                    std::slice::from_raw_parts_mut(
                         self.mapped_ptr.offset(start_offset as isize),
                         bytes_count,
                     ),

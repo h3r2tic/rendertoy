@@ -73,6 +73,7 @@ impl ImageFilterDesc {
                         ShaderUniformValue::Uint32(_) => "uint",
                         ShaderUniformValue::Int32(_) => "int",
                         ShaderUniformValue::Ivec2(_) => "ivec2",
+                        ShaderUniformValue::Vec4(_) => "vec4",
                         ShaderUniformValue::Float32Asset(_) => "float",
                         ShaderUniformValue::Uint32Asset(_) => "uint",
                         ShaderUniformValue::UsizeAsset(_) => "int", // TOOO
