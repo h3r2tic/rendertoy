@@ -54,7 +54,7 @@ impl ImageFilterDesc {
             .map(|tok| match tok {
                 ImageFilterToken::Uniform(ImageFilterUniform { name, .. }) => name.clone(),
                 ImageFilterToken::TextureSample(ImageFilterUniform { name, .. }) => {
-                    format!("textureLod({}, uv, 0)", name)
+                    format!("texelFetch({}, pix, 0)", name)
                 }
                 ImageFilterToken::Expr(s) => s.clone(),
             })
@@ -62,7 +62,7 @@ impl ImageFilterDesc {
             .concat()
     }
 
-    fn declare_uniforms(&self) -> String {
+    fn declare_cb(&self) -> String {
         self.tokens
             .iter()
             .filter_map(|tok| match tok {
@@ -77,7 +77,7 @@ impl ImageFilterDesc {
                         ShaderUniformValue::Float32Asset(_) => "float",
                         ShaderUniformValue::Uint32Asset(_) => "uint",
                         ShaderUniformValue::UsizeAsset(_) => "int", // TOOO
-                        ShaderUniformValue::TextureAsset(_) => "sampler2D",
+                        ShaderUniformValue::TextureAsset(_) => return None,
                         ShaderUniformValue::BufferAsset(_) => {
                             panic!("Buffer parameters not supported")
                         }
@@ -87,7 +87,45 @@ impl ImageFilterDesc {
                         }
                     };
 
-                    Some(format!("uniform {} {};\n", t, name))
+                    Some(format!("{} {};\n", t, name))
+                }
+                _ => None,
+            })
+            .collect::<Vec<String>>()
+            .concat()
+    }
+
+    fn declare_uniforms(&self) -> String {
+        let mut binding = 1; // will start from 2 due to pre-increment before output
+        self.tokens
+            .iter()
+            .filter_map(|tok| match tok {
+                ImageFilterToken::Uniform(ImageFilterUniform { name, value })
+                | ImageFilterToken::TextureSample(ImageFilterUniform { name, value }) => {
+                    let t = match value {
+                        ShaderUniformValue::Float32(_) => return None,
+                        ShaderUniformValue::Uint32(_) => return None,
+                        ShaderUniformValue::Int32(_) => return None,
+                        ShaderUniformValue::Ivec2(_) => return None,
+                        ShaderUniformValue::Vec4(_) => return None,
+                        ShaderUniformValue::Float32Asset(_) => return None,
+                        ShaderUniformValue::Uint32Asset(_) => return None,
+                        ShaderUniformValue::UsizeAsset(_) => return None,
+                        ShaderUniformValue::TextureAsset(_) => "texture2D",
+                        ShaderUniformValue::BufferAsset(_) => {
+                            panic!("Buffer parameters not supported")
+                        }
+                        ShaderUniformValue::Bundle(_) => panic!("Bundle parameters not supported"),
+                        ShaderUniformValue::BundleAsset(_) => {
+                            panic!("Bundle asset parameters not supported")
+                        }
+                    };
+
+                    binding += 1;
+                    Some(format!(
+                        "layout(binding = {}) uniform {} {};\n",
+                        binding, t, name
+                    ))
                 }
                 _ => None,
             })
@@ -118,8 +156,11 @@ impl ImageFilterDesc {
     fn to_glsl(&self) -> String {
         format!(
             "{uniforms}
-uniform restrict writeonly image2D outputTex;
-uniform vec4 outputTex_size;
+uniform restrict writeonly layout(binding = 0) image2D outputTex;
+layout(std140, binding = 1) uniform globals {{
+    uniform vec4 outputTex_size;
+    {cb}
+}};
 
 layout (local_size_x = 8, local_size_y = 8) in;
 void main() {{
@@ -130,6 +171,7 @@ void main() {{
     imageStore(outputTex, pix, _output_color);
 }}",
             uniforms = self.declare_uniforms(),
+            cb = self.declare_cb(),
             tokens = Self::stringify_tokens(&self.tokens)
         )
     }

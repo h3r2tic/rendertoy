@@ -297,7 +297,7 @@ impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider {
 }
 
 fn get_shader_text(source: &[shader_prepper::SourceChunk]) -> String {
-    let preamble = "#version 430\n".to_string();
+    let preamble = "#version 430\n#extension GL_EXT_samplerless_texture_functions : require\n".to_string();
 
     let mod_sources = source.iter().enumerate().map(|(i, s)| {
         let s = format!("#line 0 {}\n", i + 1) + &s.source;
@@ -312,13 +312,18 @@ fn get_shader_text(source: &[shader_prepper::SourceChunk]) -> String {
 fn shaderc_compile_glsl(source: &[shader_prepper::SourceChunk]) -> shaderc::CompilationArtifact {
     use shaderc;
     let source = get_shader_text(source);
+    shaderc_compile_glsl_str(&source)
+}
+
+fn shaderc_compile_glsl_str(source: &str) -> shaderc::CompilationArtifact {
+    use shaderc;
 
     let mut compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
     options.add_macro_definition("EP", Some("main"));
     let binary_result = compiler
         .compile_into_spirv(
-            &source,
+            source,
             shaderc::ShaderKind::Compute,
             "shader.glsl",
             "main",
@@ -507,6 +512,38 @@ pub async fn load_cs_from_string(
         line_offset: 0,
     }];
 
+    let spirv = shaderc_compile_glsl(&source);
+    let refl = reflect_spirv_shader(spirv.as_binary())?;
+
+    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
+    let pipeline =
+        create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv.as_binary())?;
+
+    let name = std::path::Path::new(&name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or("unknown".to_string());
+
+    //let reflection = reflect_shader(gfx, handle);
+    // TODO
+    let reflection = ShaderReflection {
+        uniforms: Default::default(),
+    };
+
+    Ok(ComputeShader {
+        name: name.clone(),
+        pipeline,
+        reflection,
+        spirv_reflection: refl,
+        descriptor_set_layouts,
+    })
+
+    /*let source = [shader_prepper::SourceChunk {
+        source: source.clone(),
+        file: "no-file".to_owned(),
+        line_offset: 0,
+    }];
+
     /*with_gl(|gl| {
         let handle = backend::shader::make_shader(gfx, gl::COMPUTE_SHADER, &source)?;
         let handle = backend::shader::make_program(gfx, &[handle])?;
@@ -518,7 +555,7 @@ pub async fn load_cs_from_string(
             reflection,
         })
     })*/
-    unimplemented!()
+    unimplemented!()*/
 }
 
 pub struct RasterSubShader {
