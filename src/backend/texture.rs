@@ -59,7 +59,6 @@ impl TextureKey {
 pub struct Texture {
     pub image: vk::Image,
     pub view: vk::ImageView,
-    pub storage_image: vk::Image,
     pub storage_view: vk::ImageView,
     pub key: TextureKey,
     _allocation: SharedTransientAllocation,
@@ -69,7 +68,6 @@ pub struct Texture {
 pub struct ImageResource {
     image: vk::Image,
     view: vk::ImageView,
-    storage_image: vk::Image,
     storage_view: vk::ImageView,
     memory: vk::DeviceMemory,
 }
@@ -80,7 +78,6 @@ impl ImageResource {
             image: vk::Image::null(),
             view: vk::ImageView::null(),
 
-            storage_image: vk::Image::null(),
             storage_view: vk::ImageView::null(),
 
             memory: vk::DeviceMemory::null(),
@@ -100,7 +97,7 @@ impl ImageResource {
         unsafe {
             let mut create_info = vk::ImageCreateInfo::builder()
                 .image_type(image_type)
-                .format(format)
+                .format(storage_format)
                 .extent(extent)
                 .mip_levels(1)
                 .array_layers(1)
@@ -109,6 +106,7 @@ impl ImageResource {
                 .usage(usage)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .initial_layout(vk::ImageLayout::UNDEFINED)
+                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
                 .build();
 
             self.image = vk_device().create_image(&create_info, None).unwrap();
@@ -132,14 +130,6 @@ impl ImageResource {
             vk_device()
                 .bind_image_memory(self.image, self.memory, 0)
                 .expect("Unable to bind image memory");
-
-            create_info.usage |= vk::ImageUsageFlags::STORAGE;
-            create_info.format = storage_format;
-            self.storage_image = vk_device().create_image(&create_info, None).unwrap();
-
-            vk_device()
-                .bind_image_memory(self.storage_image, self.memory, 0)
-                .expect("Unable to bind storage image memory");
         }
     }
 
@@ -148,25 +138,39 @@ impl ImageResource {
         view_type: vk::ImageViewType,
         format: vk::Format,
         storage_format: vk::Format,
+        storage_usage: vk::ImageUsageFlags,
         range: vk::ImageSubresourceRange,
     ) {
-        let mut create_info = vk::ImageViewCreateInfo::builder()
-            .view_type(view_type)
-            .format(format)
-            .subresource_range(range)
-            .image(self.image)
-            .components(vk::ComponentMapping {
-                r: vk::ComponentSwizzle::R,
-                g: vk::ComponentSwizzle::G,
-                b: vk::ComponentSwizzle::B,
-                a: vk::ComponentSwizzle::A,
-            })
-            .build();
-        self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+        let image = self.image;
+        let create_info = || {
+            vk::ImageViewCreateInfo::builder()
+                .view_type(view_type)
+                .format(format)
+                .subresource_range(range)
+                .image(image)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::R,
+                    g: vk::ComponentSwizzle::G,
+                    b: vk::ComponentSwizzle::B,
+                    a: vk::ComponentSwizzle::A,
+                })
+        };
 
-        create_info.format = storage_format;
-        create_info.image = self.storage_image;
-        self.storage_view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+        {
+            let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(storage_usage);
+
+            let create_info = create_info().push_next(&mut view_usage).build();
+            self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+        }
+
+        {
+            let create_info = create_info()
+                .format(storage_format)
+                .image(self.image)
+                .build();
+            self.storage_view =
+                unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+        }
     }
 }
 
@@ -192,7 +196,6 @@ impl TransientResource for Texture {
         Self {
             image: allocation.payload.image,
             view: allocation.payload.view,
-            storage_image: allocation.payload.storage_image,
             storage_view: allocation.payload.storage_view,
             // TODO: sampler
             key: desc,
@@ -214,13 +217,16 @@ impl TransientResource for Texture {
                 .depth(1)
                 .build(),
             vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::STORAGE,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
         img.create_view(
             vk::ImageViewType::TYPE_2D,
             format,
             storage_format,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,

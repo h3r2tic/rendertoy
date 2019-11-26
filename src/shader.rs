@@ -297,7 +297,8 @@ impl<'a> shader_prepper::IncludeProvider for ShaderIncludeProvider {
 }
 
 fn get_shader_text(source: &[shader_prepper::SourceChunk]) -> String {
-    let preamble = "#version 430\n#extension GL_EXT_samplerless_texture_functions : require\n".to_string();
+    let preamble =
+        "#version 430\n#extension GL_EXT_samplerless_texture_functions : require\n".to_string();
 
     let mod_sources = source.iter().enumerate().map(|(i, s)| {
         let s = format!("#line 0 {}\n", i + 1) + &s.source;
@@ -1072,17 +1073,15 @@ pub async fn compute_tex(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        for img in [output_tex.image, output_tex.storage_image].iter() {
-            vk_all().record_image_barrier(
-                cb,
-                ImageBarrier::new(
-                    *img,
-                    vk_sync::AccessType::Nothing,
-                    vk_sync::AccessType::ComputeShaderWrite,
-                )
-                .with_discard(true),
-            );
-        }
+        vk_all().record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                output_tex.image,
+                vk_sync::AccessType::Nothing,
+                vk_sync::AccessType::ComputeShaderWrite,
+            )
+            .with_discard(true),
+        );
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
         device.cmd_bind_descriptor_sets(
@@ -1099,16 +1098,14 @@ pub async fn compute_tex(
         // TODO: find group size
         device.cmd_dispatch(cb, dispatch_size.0 / 8, dispatch_size.1 / 8, 1);
 
-        for img in [output_tex.image, output_tex.storage_image].iter() {
-            vk_all().record_image_barrier(
-                cb,
-                ImageBarrier::new(
-                    *img,
-                    vk_sync::AccessType::ComputeShaderWrite,
-                    vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-                ),
-            );
-        }
+        vk_all().record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                output_tex.image,
+                vk_sync::AccessType::ComputeShaderWrite,
+                vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            ),
+        );
     }
 
     /*for warning in uniform_plumber.warnings.iter() {

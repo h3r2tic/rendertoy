@@ -198,6 +198,10 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
             descriptor_count: 1 << 20,
         },
         vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::SAMPLER,
+            descriptor_count: 1 << 20,
+        },
+        vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
             descriptor_count: 1 << 20,
         },
