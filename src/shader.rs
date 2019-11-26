@@ -188,6 +188,7 @@ pub struct ComputeShader {
     spirv_reflection: spirv_reflect::ShaderModule,
     reflection: ShaderReflection,
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+    local_size: (u32, u32, u32),
 }
 
 unsafe impl Send for ComputeShader {}
@@ -463,6 +464,27 @@ fn create_compute_pipeline(
     }
 }
 
+fn get_cs_local_size_from_spirv(spirv: &[u32]) -> Result<(u32, u32, u32)> {
+    let mut loader = rspirv::mr::Loader::new();
+    rspirv::binary::parse_words(spirv, &mut loader).unwrap();
+    let module = loader.module();
+
+    for inst in module.global_inst_iter() {
+        if spirv_headers::Op::ExecutionMode == inst.class.opcode {
+            let local_size = &inst.operands[2..5];
+            use rspirv::mr::Operand::LiteralInt32;
+
+            if let &[LiteralInt32(x), LiteralInt32(y), LiteralInt32(z)] = local_size {
+                return Ok((x, y, z));
+            } else {
+                bail!("Could not parse the ExecutionMode SPIR-V op");
+            }
+        }
+    }
+
+    bail!("Could not find a ExecutionMode SPIR-V op");
+}
+
 #[snoozy]
 pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
     let source = shader_prepper::process_file(
@@ -476,6 +498,7 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
 
     let spirv = shaderc_compile_glsl(&source);
     let refl = reflect_spirv_shader(spirv.as_binary())?;
+    let local_size = get_cs_local_size_from_spirv(spirv.as_binary())?;
 
     let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
     let pipeline =
@@ -498,6 +521,7 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         reflection,
         spirv_reflection: refl,
         descriptor_set_layouts,
+        local_size,
     })
 }
 
@@ -515,6 +539,7 @@ pub async fn load_cs_from_string(
 
     let spirv = shaderc_compile_glsl(&source);
     let refl = reflect_spirv_shader(spirv.as_binary())?;
+    let local_size = get_cs_local_size_from_spirv(spirv.as_binary())?;
 
     let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
     let pipeline =
@@ -537,6 +562,7 @@ pub async fn load_cs_from_string(
         reflection,
         spirv_reflection: refl,
         descriptor_set_layouts,
+        local_size,
     })
 
     /*let source = [shader_prepper::SourceChunk {
@@ -1093,10 +1119,7 @@ pub async fn compute_tex(
             &dynamic_offsets,
         );
 
-        let dispatch_size = (key.width, key.height);
-
-        // TODO: find group size
-        device.cmd_dispatch(cb, dispatch_size.0 / 8, dispatch_size.1 / 8, 1);
+        device.cmd_dispatch(cb, (key.width + cs.local_size.0 - 1) / cs.local_size.0, (key.height + cs.local_size.1 - 1) / cs.local_size.1, 1);
 
         vk_all().record_image_barrier(
             cb,

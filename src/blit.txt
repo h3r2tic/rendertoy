@@ -1,0 +1,156 @@
+; SPIR-V
+; Version: 1.0
+; Generator: Google spiregg; 0
+; Bound: 96
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+               OpExecutionMode %main LocalSize 8 8 1
+               OpSource HLSL 630
+               OpName %type_2d_image "type.2d.image"
+               OpName %input_tex "input_tex"
+               OpName %type_2d_image_0 "type.2d.image"
+               OpName %output_tex "output_tex"
+               OpName %type_sampler "type.sampler"
+               OpName %linear_sampler "linear_sampler"
+               OpName %type_PushConstant_ "type.PushConstant."
+               OpMemberName %type_PushConstant_ 0 "input_tex_size"
+               OpName %push_constants "push_constants"
+               OpName %main "main"
+               OpName %type_sampled_image "type.sampled.image"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %input_tex DescriptorSet 0
+               OpDecorate %input_tex Binding 0
+               OpDecorate %output_tex DescriptorSet 0
+               OpDecorate %output_tex Binding 1
+               OpDecorate %linear_sampler DescriptorSet 0
+               OpDecorate %linear_sampler Binding 2
+               OpMemberDecorate %type_PushConstant_ 0 Offset 0
+               OpDecorate %type_PushConstant_ Block
+      %float = OpTypeFloat 32
+  %float_0_5 = OpConstant %float 0.5
+    %v2float = OpTypeVector %float 2
+         %16 = OpConstantComposite %v2float %float_0_5 %float_0_5
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+    %float_0 = OpConstant %float 0
+%float_0_00313080009 = OpConstant %float 0.00313080009
+%float_12_9200001 = OpConstant %float 12.9200001
+%float_0_416666657 = OpConstant %float 0.416666657
+%float_1_05499995 = OpConstant %float 1.05499995
+%float_0_0549999997 = OpConstant %float 0.0549999997
+%type_2d_image = OpTypeImage %float 2D 2 0 0 1 Unknown
+%_ptr_UniformConstant_type_2d_image = OpTypePointer UniformConstant %type_2d_image
+%type_2d_image_0 = OpTypeImage %float 2D 2 0 0 2 Rgba32f
+%_ptr_UniformConstant_type_2d_image_0 = OpTypePointer UniformConstant %type_2d_image_0
+%type_sampler = OpTypeSampler
+%_ptr_UniformConstant_type_sampler = OpTypePointer UniformConstant %type_sampler
+%type_PushConstant_ = OpTypeStruct %v2float
+%_ptr_PushConstant_type_PushConstant_ = OpTypePointer PushConstant %type_PushConstant_
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+       %void = OpTypeVoid
+         %33 = OpTypeFunction %void
+     %v2uint = OpTypeVector %uint 2
+    %v4float = OpTypeVector %float 4
+    %v3float = OpTypeVector %float 3
+%_ptr_PushConstant_v2float = OpTypePointer PushConstant %v2float
+%type_sampled_image = OpTypeSampledImage %type_2d_image
+       %bool = OpTypeBool
+  %input_tex = OpVariable %_ptr_UniformConstant_type_2d_image UniformConstant
+ %output_tex = OpVariable %_ptr_UniformConstant_type_2d_image_0 UniformConstant
+%linear_sampler = OpVariable %_ptr_UniformConstant_type_sampler UniformConstant
+%push_constants = OpVariable %_ptr_PushConstant_type_PushConstant_ PushConstant
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+       %main = OpFunction %void None %33
+         %39 = OpLabel
+         %40 = OpLoad %v3uint %gl_GlobalInvocationID
+         %41 = OpVectorShuffle %v2uint %40 %40 0 1
+         %42 = OpLoad %type_2d_image %input_tex
+         %43 = OpLoad %type_sampler %linear_sampler
+         %44 = OpConvertUToF %v2float %41
+         %45 = OpFAdd %v2float %44 %16
+         %46 = OpAccessChain %_ptr_PushConstant_v2float %push_constants %int_0
+         %47 = OpLoad %v2float %46
+         %48 = OpFMul %v2float %45 %47
+         %49 = OpSampledImage %type_sampled_image %42 %43
+         %50 = OpImageSampleExplicitLod %v4float %49 %48 Lod %float_0
+         %51 = OpCompositeExtract %float %50 0
+               OpBranch %52
+         %52 = OpLabel
+               OpLoopMerge %53 %54 None
+               OpBranch %55
+         %55 = OpLabel
+         %56 = OpFOrdLessThanEqual %bool %51 %float_0_00313080009
+               OpSelectionMerge %57 None
+               OpBranchConditional %56 %58 %59
+         %59 = OpLabel
+         %60 = OpExtInst %float %1 Pow %51 %float_0_416666657
+         %61 = OpFMul %float %60 %float_1_05499995
+         %62 = OpFSub %float %61 %float_0_0549999997
+               OpBranch %53
+         %58 = OpLabel
+         %63 = OpFMul %float %51 %float_12_9200001
+               OpBranch %53
+         %57 = OpLabel
+               OpUnreachable
+         %54 = OpLabel
+               OpBranch %52
+         %53 = OpLabel
+         %64 = OpPhi %float %62 %59 %63 %58
+         %65 = OpCompositeExtract %float %50 1
+               OpBranch %66
+         %66 = OpLabel
+               OpLoopMerge %67 %68 None
+               OpBranch %69
+         %69 = OpLabel
+         %70 = OpFOrdLessThanEqual %bool %65 %float_0_00313080009
+               OpSelectionMerge %71 None
+               OpBranchConditional %70 %72 %73
+         %73 = OpLabel
+         %74 = OpExtInst %float %1 Pow %65 %float_0_416666657
+         %75 = OpFMul %float %74 %float_1_05499995
+         %76 = OpFSub %float %75 %float_0_0549999997
+               OpBranch %67
+         %72 = OpLabel
+         %77 = OpFMul %float %65 %float_12_9200001
+               OpBranch %67
+         %71 = OpLabel
+               OpUnreachable
+         %68 = OpLabel
+               OpBranch %66
+         %67 = OpLabel
+         %78 = OpPhi %float %76 %73 %77 %72
+         %79 = OpCompositeExtract %float %50 2
+               OpBranch %80
+         %80 = OpLabel
+               OpLoopMerge %81 %82 None
+               OpBranch %83
+         %83 = OpLabel
+         %84 = OpFOrdLessThanEqual %bool %79 %float_0_00313080009
+               OpSelectionMerge %85 None
+               OpBranchConditional %84 %86 %87
+         %87 = OpLabel
+         %88 = OpExtInst %float %1 Pow %79 %float_0_416666657
+         %89 = OpFMul %float %88 %float_1_05499995
+         %90 = OpFSub %float %89 %float_0_0549999997
+               OpBranch %81
+         %86 = OpLabel
+         %91 = OpFMul %float %79 %float_12_9200001
+               OpBranch %81
+         %85 = OpLabel
+               OpUnreachable
+         %82 = OpLabel
+               OpBranch %80
+         %81 = OpLabel
+         %92 = OpPhi %float %90 %87 %91 %86
+         %93 = OpCompositeConstruct %v3float %64 %78 %92
+         %94 = OpVectorShuffle %v4float %50 %93 4 5 6 3
+         %95 = OpLoad %type_2d_image_0 %output_tex
+               OpImageWrite %95 %41 %94 None
+               OpReturn
+               OpFunctionEnd
+

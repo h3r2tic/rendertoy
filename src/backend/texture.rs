@@ -197,7 +197,6 @@ impl TransientResource for Texture {
             image: allocation.payload.image,
             view: allocation.payload.view,
             storage_view: allocation.payload.storage_view,
-            // TODO: sampler
             key: desc,
             _allocation: allocation,
         }
