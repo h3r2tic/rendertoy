@@ -674,6 +674,13 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
             .expect("Begin commandbuffer");
 
+        /*let viewport = vk::Viewport::builder()
+            .width(vk_all().window_width as f32)
+            .height(vk_all().window_width as f32)
+            .min_depth(-1.0)
+            .max_depth(1.0);
+        device.cmd_set_viewport(command_buffer, 0, &[viewport.build()]);*/
+
         for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
             unsafe { f(vk_all(), vk_frame()) };
         }
