@@ -1,5 +1,11 @@
-Texture2D input_tex : register(t0);
-RWTexture2D<float4> output_tex : register(u0);
+[[vk::binding(0)]] Texture2D input_tex;
+[[vk::binding(1)]] RWTexture2D<float4> output_tex;
+[[vk::binding(2)]] SamplerState linear_sampler;
+
+[[vk::push_constant]]
+struct {
+    float2 input_tex_size;
+} push_constants;
 
 float linear_to_srgb(float v) {
     if (v <= 0.0031308) {
@@ -18,7 +24,10 @@ float3 linear_to_srgb(float3 v) {
 
 [numthreads(8, 8, 1)]
 void main(in uint2 DispatchID : SV_DispatchThreadID) {
-    float4 v = input_tex[DispatchID];
+    float4 v = input_tex.SampleLevel(
+        linear_sampler,
+        float2(DispatchID + 0.5) * push_constants.input_tex_size,
+        0);
     v.rgb = linear_to_srgb(v.rgb);
     output_tex[DispatchID] = v;
 }

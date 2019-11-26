@@ -59,6 +59,8 @@ impl TextureKey {
 pub struct Texture {
     pub image: vk::Image,
     pub view: vk::ImageView,
+    pub storage_image: vk::Image,
+    pub storage_view: vk::ImageView,
     pub key: TextureKey,
     _allocation: SharedTransientAllocation,
 }
@@ -66,18 +68,22 @@ pub struct Texture {
 #[derive(Clone)]
 pub struct ImageResource {
     image: vk::Image,
-    memory: vk::DeviceMemory,
     view: vk::ImageView,
-    //sampler: vk::Sampler,
+    storage_image: vk::Image,
+    storage_view: vk::ImageView,
+    memory: vk::DeviceMemory,
 }
 
 impl ImageResource {
     fn new() -> Self {
         ImageResource {
             image: vk::Image::null(),
-            memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
-            //sampler: vk::Sampler::null(),
+
+            storage_image: vk::Image::null(),
+            storage_view: vk::ImageView::null(),
+
+            memory: vk::DeviceMemory::null(),
         }
     }
 
@@ -85,13 +91,14 @@ impl ImageResource {
         &mut self,
         image_type: vk::ImageType,
         format: vk::Format,
+        storage_format: vk::Format,
         extent: vk::Extent3D,
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
         memory_flags: vk::MemoryPropertyFlags,
     ) {
         unsafe {
-            let create_info = vk::ImageCreateInfo::builder()
+            let mut create_info = vk::ImageCreateInfo::builder()
                 .image_type(image_type)
                 .format(format)
                 .extent(extent)
@@ -125,6 +132,14 @@ impl ImageResource {
             vk_device()
                 .bind_image_memory(self.image, self.memory, 0)
                 .expect("Unable to bind image memory");
+
+            create_info.usage |= vk::ImageUsageFlags::STORAGE;
+            create_info.format = storage_format;
+            self.storage_image = vk_device().create_image(&create_info, None).unwrap();
+
+            vk_device()
+                .bind_image_memory(self.storage_image, self.memory, 0)
+                .expect("Unable to bind storage image memory");
         }
     }
 
@@ -132,9 +147,10 @@ impl ImageResource {
         &mut self,
         view_type: vk::ImageViewType,
         format: vk::Format,
+        storage_format: vk::Format,
         range: vk::ImageSubresourceRange,
     ) {
-        let create_info = vk::ImageViewCreateInfo::builder()
+        let mut create_info = vk::ImageViewCreateInfo::builder()
             .view_type(view_type)
             .format(format)
             .subresource_range(range)
@@ -147,11 +163,22 @@ impl ImageResource {
             })
             .build();
         self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+
+        create_info.format = storage_format;
+        create_info.image = self.storage_image;
+        self.storage_view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
     }
 }
 
 pub fn create_texture(key: TextureKey) -> Texture {
     create_transient(key)
+}
+
+fn get_storage_compatible_format(f: vk::Format) -> vk::Format {
+    match f {
+        vk::Format::R8G8B8A8_SRGB => vk::Format::R8G8B8A8_UNORM,
+        _ => f,
+    }
 }
 
 impl TransientResource for Texture {
@@ -165,6 +192,8 @@ impl TransientResource for Texture {
         Self {
             image: allocation.payload.image,
             view: allocation.payload.view,
+            storage_image: allocation.payload.storage_image,
+            storage_view: allocation.payload.storage_view,
             // TODO: sampler
             key: desc,
             _allocation: allocation,
@@ -174,23 +203,24 @@ impl TransientResource for Texture {
     fn allocate_payload(key: TextureKey) -> Self::Allocation {
         let format = vk::Format::from_raw(key.format);
         let mut img = ImageResource::new();
+        let storage_format = get_storage_compatible_format(format);
         img.create_image(
             vk::ImageType::TYPE_2D,
             format,
+            storage_format,
             vk::Extent3D::builder()
                 .width(key.width)
                 .height(key.height)
                 .depth(1)
                 .build(),
             vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
         img.create_view(
             vk::ImageViewType::TYPE_2D,
             format,
+            storage_format,
             vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,

@@ -954,7 +954,7 @@ fn update_descriptor_sets(
                     {
                         let image_info = [vk::DescriptorImageInfo::builder()
                             .image_layout(vk::ImageLayout::GENERAL)
-                            .image_view(value.view)
+                            .image_view(value.storage_view)
                             .build()];
 
                         ds_writes.push(
@@ -1035,15 +1035,17 @@ pub async fn compute_tex(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        vk_all().record_image_barrier(
-            cb,
-            ImageBarrier::new(
-                output_tex.image,
-                vk_sync::AccessType::Nothing,
-                vk_sync::AccessType::ComputeShaderWrite,
-            )
-            .with_discard(true),
-        );
+        for img in [output_tex.image, output_tex.storage_image].iter() {
+            vk_all().record_image_barrier(
+                cb,
+                ImageBarrier::new(
+                    *img,
+                    vk_sync::AccessType::Nothing,
+                    vk_sync::AccessType::ComputeShaderWrite,
+                )
+                .with_discard(true),
+            );
+        }
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
         device.cmd_bind_descriptor_sets(
@@ -1060,14 +1062,16 @@ pub async fn compute_tex(
         // TODO: find group size
         device.cmd_dispatch(cb, dispatch_size.0 / 8, dispatch_size.1 / 8, 1);
 
-        vk_all().record_image_barrier(
-            cb,
-            ImageBarrier::new(
-                output_tex.image,
-                vk_sync::AccessType::ComputeShaderWrite,
-                vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-            ),
-        );
+        for img in [output_tex.image, output_tex.storage_image].iter() {
+            vk_all().record_image_barrier(
+                cb,
+                ImageBarrier::new(
+                    *img,
+                    vk_sync::AccessType::ComputeShaderWrite,
+                    vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                ),
+            );
+        }
     }
 
     /*for warning in uniform_plumber.warnings.iter() {

@@ -143,16 +143,16 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
         format: internal_format.as_raw(),
     });
 
-    {
-        let vk_frame = unsafe { vk_frame() };
+    let res_image = res.image;
+    vk_add_setup_command(move |vk_all, vk_frame| {
         let cb = vk_frame.command_buffer.lock().unwrap();
         let cb: vk::CommandBuffer = cb.cb;
 
         unsafe {
-            vk_all().record_image_barrier(
+            vk_all.record_image_barrier(
                 cb,
                 ImageBarrier::new(
-                    res.image,
+                    res_image,
                     vk_sync::AccessType::Nothing,
                     vk_sync::AccessType::TransferWrite,
                 )
@@ -177,21 +177,21 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
             device.cmd_copy_buffer_to_image(
                 cb,
                 image_buffer,
-                res.image,
+                res_image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[buffer_copy_regions.build()],
             );
 
-            vk_all().record_image_barrier(
+            vk_all.record_image_barrier(
                 cb,
                 ImageBarrier::new(
-                    res.image,
+                    res_image,
                     vk_sync::AccessType::TransferWrite,
                     vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
                 ),
             )
         };
-    }
+    });
 
     /*match img {
         DynamicImage::ImageLuma8(ref img) => make_gl_tex(img, dims, gl::R8, gl::RED),

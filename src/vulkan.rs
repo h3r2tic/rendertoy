@@ -132,6 +132,8 @@ pub struct VkFrameData {
     pub rendering_complete_semaphore: vk::Semaphore,
 }
 
+pub const SAMPLER_LINEAR: usize = 0;
+
 pub struct VkKitchenSink {
     pub entry: Entry,
     pub instance: Instance,
@@ -153,6 +155,8 @@ pub struct VkKitchenSink {
 
     pub swapchain: vk::SwapchainKHR,
     pub swapchain_acquired_semaphores: Vec<vk::Semaphore>,
+
+    pub samplers: [vk::Sampler; 1],
 
     pub frame_data: Vec<VkFrameData>,
 
@@ -466,6 +470,20 @@ impl VkKitchenSink {
                     .collect()
             };
 
+            let sampler_info = vk::SamplerCreateInfo {
+                mag_filter: vk::Filter::LINEAR,
+                min_filter: vk::Filter::LINEAR,
+                mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+                address_mode_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                address_mode_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                address_mode_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                max_anisotropy: 1.0,
+                border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+                compare_op: vk::CompareOp::NEVER,
+                ..Default::default()
+            };
+            let sampler = device.create_sampler(&sampler_info, None).unwrap();
+
             let swapchain_acquired_semaphores = create_swapchain_semaphores();
             let rendering_complete_semaphores = create_swapchain_semaphores();
 
@@ -506,6 +524,7 @@ impl VkKitchenSink {
                 swapchain_loader,
                 swapchain,
                 swapchain_acquired_semaphores,
+                samplers: [sampler],
                 frame_data,
                 surface,
                 debug_call_back,
@@ -528,6 +547,10 @@ impl VkKitchenSink {
                 },
                 vk::DescriptorPoolSize {
                     ty: vk::DescriptorType::STORAGE_IMAGE,
+                    descriptor_count: self.frame_data.len() as u32,
+                },
+                vk::DescriptorPoolSize {
+                    ty: vk::DescriptorType::SAMPLER,
                     descriptor_count: self.frame_data.len() as u32,
                 },
             ];
@@ -647,6 +670,10 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
             .expect("Begin commandbuffer");
 
+        for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
+            unsafe { f(vk_all(), vk_frame()) };
+        }
+
         f(device, command_buffer);
 
         device
@@ -713,7 +740,7 @@ pub fn find_memorytype_index_f<F: Fn(vk::MemoryPropertyFlags, vk::MemoryProperty
 }
 
 static mut VK_KITCHEN_SINK: Option<VkKitchenSink> = None;
-static mut VK_CURRENT_FRAME_DATA_IDX: usize = 0;
+static mut VK_CURRENT_FRAME_DATA_IDX: usize = std::usize::MAX;
 
 pub fn initialize_vk_state(vk: VkKitchenSink) {
     unsafe {
@@ -736,5 +763,21 @@ pub unsafe fn vk_all() -> &'static VkKitchenSink {
 }
 
 pub unsafe fn vk_frame() -> &'static VkFrameData {
+    assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
     std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().frame_data[VK_CURRENT_FRAME_DATA_IDX])
+}
+
+lazy_static! {
+    pub(crate) static ref VK_SETUP_COMMANDS: Mutex<Vec<Box<dyn FnOnce(&VkKitchenSink, &'static VkFrameData) + Send + 'static>>> =
+        { Mutex::new(Vec::new()) };
+}
+
+pub fn vk_add_setup_command(f: impl FnOnce(&VkKitchenSink, &'static VkFrameData) + Send + 'static) {
+    if unsafe { VK_CURRENT_FRAME_DATA_IDX } == std::usize::MAX {
+        // If we haven't started rendering yet, delay this.
+        VK_SETUP_COMMANDS.lock().unwrap().push(Box::new(f));
+    } else {
+        // Otherwise do it now
+        unsafe { f(vk_all(), vk_frame()) };
+    }
 }

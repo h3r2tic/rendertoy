@@ -716,6 +716,13 @@ impl Rendertoy {
                                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                                 .binding(1)
                                 .build(),
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::SAMPLER)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(2)
+                                .immutable_samplers(&[vk.samplers[vulkan::SAMPLER_LINEAR]])
+                                .build(),
                         ])
                         .build(),
                     None,
@@ -819,6 +826,18 @@ impl Rendertoy {
                             0,
                             &[present_descriptor_sets[present_index]],
                             &[],
+                        );
+                        let push_constants: (f32, f32) =
+                            (1.0 / vk.window_width as f32, 1.0 / vk.window_height as f32);
+                        vk.device.cmd_push_constants(
+                            cb,
+                            present_pipeline.pipeline_layout,
+                            vk::ShaderStageFlags::COMPUTE,
+                            0,
+                            std::slice::from_raw_parts(
+                                &push_constants.0 as *const f32 as *const u8,
+                                2 * 4,
+                            ),
                         );
                         vk.device
                             .cmd_dispatch(cb, vk.window_width / 8, vk.window_height / 8, 1);
@@ -980,8 +999,13 @@ fn create_present_compute_pipeline(
     let shader_code = ash::util::read_spv(&mut shader_spv).expect("Failed to read shader spv");
 
     let descriptor_set_layouts = [descriptor_set_layout];
-    let layout_create_info =
-        vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts);
+    let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
+        .set_layouts(&descriptor_set_layouts)
+        .push_constant_ranges(&[vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            offset: 0,
+            size: 2 * 4,
+        }]);
 
     unsafe {
         let shader_module = vk_device
