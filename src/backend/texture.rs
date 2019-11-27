@@ -138,7 +138,7 @@ impl ImageResource {
         view_type: vk::ImageViewType,
         format: vk::Format,
         storage_format: vk::Format,
-        storage_usage: vk::ImageUsageFlags,
+        readonly_usage: vk::ImageUsageFlags,
         range: vk::ImageSubresourceRange,
     ) {
         let image = self.image;
@@ -157,8 +157,7 @@ impl ImageResource {
         };
 
         {
-            let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(storage_usage);
-
+            let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(readonly_usage);
             let create_info = create_info().push_next(&mut view_usage).build();
             self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
         }
@@ -225,7 +224,7 @@ impl TransientResource for Texture {
             vk::ImageViewType::TYPE_2D,
             format,
             storage_format,
-            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageUsageFlags::SAMPLED,
             vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,

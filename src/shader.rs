@@ -326,6 +326,9 @@ fn shaderc_compile_glsl_str(shader_name: &str, source: &str) -> shaderc::Compila
     let mut compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
     options.add_macro_definition("EP", Some("main"));
+    options.set_optimization_level(shaderc::OptimizationLevel::Performance);
+    options.set_generate_debug_info();
+    options.set_auto_bind_uniforms(true);
     let binary_result = compiler
         .compile_into_spirv(
             source,
@@ -505,12 +508,39 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         .unwrap_or("unknown".to_string());
 
     let spirv = shaderc_compile_glsl(&name, &source);
-    let refl = reflect_spirv_shader(spirv.as_binary())?;
-    let local_size = get_cs_local_size_from_spirv(spirv.as_binary())?;
+    let spirv_binary = spirv.as_binary();
+
+    /*{
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        {
+            use std::fs::File;
+use std::io::prelude::*;
+
+            let mut file = File::create("tmp/".to_owned() + &name + ".spv").unwrap();
+            file.write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
+        }
+
+        /*let mut child = Command::new("C:\\prog\\shaderc\\bin\\spirv-opt.exe").arg("-").arg("-o").arg("-").stdin(Stdio::piped())
+        //.stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    child.stdin
+        .as_mut()
+        .ok_or("Child process stdin has not been captured!").unwrap()
+        .write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
+
+        let output = child.wait_with_output()?;*/
+    }*/
+
+    let refl = reflect_spirv_shader(spirv_binary)?;
+    let local_size = get_cs_local_size_from_spirv(spirv_binary)?;
 
     let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
     let pipeline =
-        create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv.as_binary())?;
+        create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv_binary)?;
 
     //let reflection = reflect_shader(gfx, handle);
     // TODO

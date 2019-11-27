@@ -99,7 +99,35 @@ impl LinearUniformBuffer {
         }
     }
 
+    pub fn map(&mut self) {
+        if self.mapped_ptr == std::ptr::null_mut() {
+            unsafe {
+                self.mapped_ptr = vk_device()
+                    .map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty())
+                    .unwrap() as *mut u8;
+            }
+
+            assert!(
+                self.mapped_ptr != std::ptr::null_mut(),
+                "failed to map uniform buffer"
+            );
+        }
+    }
+
+    pub fn unmap(&mut self) {
+        if self.mapped_ptr != std::ptr::null_mut() {
+            unsafe {
+                vk_device().unmap_memory(self.memory);
+            }
+            self.mapped_ptr = std::ptr::null_mut();
+            self.write_head
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     pub fn allocate(&self, bytes_count: usize) -> snoozy::Result<(vk::Buffer, u64, &mut [u8])> {
+        assert!(self.mapped_ptr != std::ptr::null_mut());
+
         unsafe {
             let alloc_size =
                 (bytes_count + self.min_offset_alignment - 1) & self.min_offset_alignment;
@@ -130,6 +158,7 @@ pub struct VkFrameData {
     pub present_image: vk::Image,
     pub present_image_view: vk::ImageView,
     pub rendering_complete_semaphore: vk::Semaphore,
+    pub submit_done_fence: vk::Fence,
 }
 
 pub const SAMPLER_LINEAR: usize = 0;
@@ -246,6 +275,63 @@ fn allocate_frame_command_buffer(
     VkCommandBufferData { cb, pool }
 }
 
+/*#[cfg(target_os = "windows")]
+fn set_stable_power_state(find_luid: &[u8]) {
+    use winapi::shared::dxgi;
+    use winapi::um::{d3d12, d3dcommon};
+    let mut dxgi_factory: *mut dxgi::IDXGIFactory1 = std::ptr::null_mut();
+    let hr = unsafe {
+        dxgi::CreateDXGIFactory1(
+            &dxgi::IID_IDXGIFactory1,
+            &mut dxgi_factory as *mut _ as *mut *mut _,
+        )
+    };
+    if hr < 0 {
+        panic!("Failed to create DXGI factory");
+    }
+    let mut idx = 0;
+    loop {
+        let mut adapter1: *mut dxgi::IDXGIAdapter1 = std::ptr::null_mut();
+        let hr = unsafe {
+            dxgi_factory
+                .as_ref()
+                .unwrap()
+                .EnumAdapters1(idx, &mut adapter1 as *mut _ as *mut *mut _)
+        };
+        if hr != 0 {
+            break;
+        }
+        let mut desc: dxgi::DXGI_ADAPTER_DESC1 = unsafe { std::mem::zeroed() };
+        let hr = unsafe { adapter1.as_ref().unwrap().GetDesc1(&mut desc) };
+        if hr < 0 {
+            panic!("Failed to get adapter descriptor");
+        }
+        let luid =
+            unsafe { std::slice::from_raw_parts(&desc.AdapterLuid as *const _ as *const u8, 8) };
+        if luid == find_luid {
+            let mut device: *mut d3d12::ID3D12Device = std::ptr::null_mut();
+            let hr = unsafe {
+                d3d12::D3D12CreateDevice(
+                    adapter1 as *mut _,
+                    d3dcommon::D3D_FEATURE_LEVEL_11_0,
+                    &d3d12::IID_ID3D12Device,
+                    &mut device as *mut _ as *mut *mut _,
+                )
+            };
+            if hr < 0 {
+                panic!("Failed to create matching device");
+            }
+            let hr = unsafe { device.as_ref().unwrap().SetStablePowerState(1) };
+            if hr < 0 {
+                panic!("Failed to call SetStablePowerState, did you enable developer mode?");
+            } else {
+                println!("Enabled stable power state");
+            }
+        }
+        idx += 1;
+    }
+}*/
+
 impl VkKitchenSink {
     pub fn new(window: &winit::Window) -> Result<Self, Box<dyn Error>> {
         unsafe {
@@ -317,6 +403,20 @@ impl VkKitchenSink {
                 .filter_map(|v| v)
                 .nth(0)
                 .expect("Couldn't find suitable device.");
+
+            /*{
+                let mut physical_device_id = vk::PhysicalDeviceIDProperties::builder().build();
+                let mut physical_device_properties2 = vk::PhysicalDeviceProperties2::default();
+                physical_device_properties2.p_next = &mut physical_device_id as *mut _ as *mut _;
+                unsafe {
+                    instance
+                        .get_physical_device_properties2(pdevice, &mut physical_device_properties2)
+                };
+                let physical_properties = physical_device_properties2.properties;
+                if physical_device_id.device_luid_valid == 1 {
+                    set_stable_power_state(&physical_device_id.device_luid);
+                }
+            }*/
 
             let present_queue_family_index = present_queue_family_index as u32;
             let device_properties = instance.get_physical_device_properties(pdevice);
@@ -499,6 +599,16 @@ impl VkKitchenSink {
                         &device_memory_properties,
                         device_properties.limits.min_uniform_buffer_offset_alignment as usize,
                     );
+
+                    let submit_done_fence = device
+                        .create_fence(
+                            &vk::FenceCreateInfo::builder()
+                                .flags(vk::FenceCreateFlags::SIGNALED)
+                                .build(),
+                            None,
+                        )
+                        .expect("Create fence failed.");
+
                     VkFrameData {
                         uniforms,
                         descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
@@ -509,6 +619,7 @@ impl VkKitchenSink {
                         present_image: present_images[i],
                         present_image_view: present_image_views[i],
                         rendering_complete_semaphore: rendering_complete_semaphores[i],
+                        submit_done_fence,
                     }
                 })
                 .collect();
@@ -661,6 +772,10 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
 ) {
     unsafe {
         device
+            .wait_for_fences(&[vk_frame().submit_done_fence], true, std::u64::MAX)
+            .expect("Wait for fence failed.");
+
+        device
             .reset_command_buffer(
                 command_buffer,
                 vk::CommandBufferResetFlags::RELEASE_RESOURCES,
@@ -676,10 +791,15 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
 
         /*let viewport = vk::Viewport::builder()
             .width(vk_all().window_width as f32)
-            .height(vk_all().window_width as f32)
+            .height(-(vk_all().window_height as f32))
+            .y(vk_all().window_height as f32)
             .min_depth(-1.0)
             .max_depth(1.0);
         device.cmd_set_viewport(command_buffer, 0, &[viewport.build()]);*/
+
+        unsafe {
+            vk_frame_mut().uniforms.map();
+        }
 
         for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
             unsafe { f(vk_all(), vk_frame()) };
@@ -687,13 +807,18 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
 
         f(device, command_buffer);
 
+        unsafe {
+            for fd in VK_KITCHEN_SINK.as_mut().unwrap().frame_data.iter_mut() {
+                fd.uniforms.unmap();
+            }
+        }
+
         device
             .end_command_buffer(command_buffer)
             .expect("End commandbuffer");
 
-        let submit_fence = device
-            .create_fence(&vk::FenceCreateInfo::default(), None)
-            .expect("Create fence failed.");
+        let submit_fence = vk_frame().submit_done_fence;
+        device.reset_fences(&[submit_fence]);
 
         let command_buffers = vec![command_buffer];
 
@@ -706,10 +831,6 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
         device
             .queue_submit(submit_queue, &[submit_info.build()], submit_fence)
             .expect("queue submit failed.");
-        device
-            .wait_for_fences(&[submit_fence], true, std::u64::MAX)
-            .expect("Wait for fence failed.");
-        device.destroy_fence(submit_fence, None);
     }
 }
 
@@ -760,7 +881,7 @@ pub fn initialize_vk_state(vk: VkKitchenSink) {
 }
 
 pub fn vk_device() -> &'static Device {
-    unsafe { std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().device) }
+    unsafe { std::mem::transmute(&VK_KITCHEN_SINK.as_ref().expect("vk kitchen sink").device) }
 }
 
 pub unsafe fn vk_begin_frame(data_idx: usize) {
@@ -770,12 +891,29 @@ pub unsafe fn vk_begin_frame(data_idx: usize) {
 }
 
 pub unsafe fn vk_all() -> &'static VkKitchenSink {
-    std::mem::transmute(VK_KITCHEN_SINK.as_ref().unwrap())
+    std::mem::transmute(VK_KITCHEN_SINK.as_ref().expect("vk kitchen sink"))
 }
 
 pub unsafe fn vk_frame() -> &'static VkFrameData {
     assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
-    std::mem::transmute(&VK_KITCHEN_SINK.as_ref().unwrap().frame_data[VK_CURRENT_FRAME_DATA_IDX])
+    std::mem::transmute(
+        &VK_KITCHEN_SINK
+            .as_ref()
+            .expect("vk kitchen sink")
+            .frame_data[VK_CURRENT_FRAME_DATA_IDX],
+    )
+}
+
+pub(crate) unsafe fn vk_frame_mut() -> &'static mut VkFrameData {
+    assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
+    unsafe {
+        std::mem::transmute(
+            &mut VK_KITCHEN_SINK
+                .as_mut()
+                .expect("vk kitchen sink")
+                .frame_data[VK_CURRENT_FRAME_DATA_IDX],
+        )
+    }
 }
 
 lazy_static! {

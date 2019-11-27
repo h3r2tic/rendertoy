@@ -447,6 +447,8 @@ impl Rendertoy {
             self.average_frame_time * blend + dt * (1.0 - blend)
         };
 
+        //dbg!(self.average_frame_time);
+
         let state = FrameState {
             mouse: &self.mouse_state,
             keys: &self.keyboard,
