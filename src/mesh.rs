@@ -1,5 +1,5 @@
 use super::*;
-use futures::future::join_all;
+use futures::future::{join_all, try_join_all};
 
 #[derive(Clone, Abomonation)]
 pub enum MeshMaterialMap {
@@ -342,37 +342,33 @@ pub async fn upload_raster_mesh(
         (mesh_clone.materials, mesh_clone.maps)
     };
 
-    let materials = join_all(mesh_materials.into_iter().map(|m| {
+    let materials: Vec<GpuMaterial> = try_join_all(mesh_materials.into_iter().map(|m| {
         let ctx = ctx.clone();
 
         // TODO: don't clone all the things
         let mesh_maps = mesh_maps.clone();
-        tokio::executor::Executor::spawn_with_handle(
-            &mut tokio::executor::DefaultExecutor::current(),
-            async move {
-                let mut res = GpuMaterial::default();
-                res.base_color_mult = m.base_color_mult;
+        tokio::task::spawn(async move {
+            let mut res = GpuMaterial::default();
+            res.base_color_mult = m.base_color_mult;
 
-                let maps = join_all(m.maps.iter().map(|map_id| {
-                    tokio::executor::Executor::spawn_with_handle(
-                        &mut tokio::executor::DefaultExecutor::current(),
-                        // TODO: don't clone all the things
-                        upload_material_map(ctx.clone(), mesh_maps[*map_id as usize].clone()),
-                    )
-                    .expect("failed to spawn_with_handle()")
-                }))
-                .await;
+            let maps: Vec<_> = try_join_all(m.maps.iter().map(|map_id| {
+                tokio::task::spawn(
+                    // TODO: don't clone all the things
+                    upload_material_map(ctx.clone(), mesh_maps[*map_id as usize].clone()),
+                )
+            }))
+            .await
+            .expect("tokio join error");
 
-                for (i, m) in maps.into_iter().enumerate() {
-                    res.maps[i] = m;
-                }
+            for (i, m) in maps.into_iter().enumerate() {
+                res.maps[i] = m;
+            }
 
-                res
-            },
-        )
-        .expect("failed to spawn_with_handle()")
+            res
+        })
     }))
-    .await;
+    .await
+    .expect("tokio join error");
 
     Ok(shader_uniforms!(
         mesh_vertex_buf: upload_array_buffer(verts),

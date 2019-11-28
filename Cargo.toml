@@ -26,8 +26,7 @@ typemap = "0.3"
 abomonation = "0.7"
 abomonation_derive = "0.5"
 gltf = "0.14"
-tokio = "0.2.0-alpha.6"
-
+tokio = { version = "0.2.1", features = ["rt-core", "rt-threaded"] }
 winit = "0.19.5"
 ash-window = { git = "https://github.com/norse-rs/ash-window.git", revision = "9b6ab4d03b015ecae8ec9c771461e80446487ad4" }
 ash = "0.29.0"
@@ -36,6 +35,8 @@ shaderc = "0.6.1"
 spirv-reflect = "0.2.3"
 spirv_headers = "1.3.4"
 rspirv = "0.5.4"
+
+rpmalloc = "0.1.0"
 
 #[target.'cfg(windows)'.dependencies]
 #winapi = { version = "0.3.8", features = ["winuser", "dxgi", "d3d12"] }

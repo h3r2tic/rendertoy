@@ -65,6 +65,9 @@ extern crate snoozy_macros;
 #[macro_use]
 extern crate abomonation_derive;
 
+#[global_allocator]
+static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
+
 use clap::ArgMatches;
 use std::str::FromStr;
 
@@ -126,6 +129,7 @@ pub struct Rendertoy {
     last_frame_instant: std::time::Instant,
     show_gui: bool,
     average_frame_time: f32,
+    frame_time_display_cooldown: f32,
 }
 
 #[derive(Clone)]
@@ -225,7 +229,9 @@ impl Rendertoy {
             .build(&events_loop)
             .expect("window");
 
-        crate::vulkan::initialize_vk_state(VkKitchenSink::new(&window).unwrap());
+        crate::vulkan::initialize_vk_state(
+            VkKitchenSink::new(&window, cfg.graphics_debugging).unwrap(),
+        );
 
         /*let windowed_context = winit::ContextBuilder::new()
             .with_vsync(cfg.vsync)
@@ -305,6 +311,7 @@ impl Rendertoy {
             last_frame_instant: std::time::Instant::now(),
             show_gui: true,
             average_frame_time: 0.0,
+            frame_time_display_cooldown: 0.0,
         }
     }
 
@@ -447,7 +454,11 @@ impl Rendertoy {
             self.average_frame_time * blend + dt * (1.0 - blend)
         };
 
-        //dbg!(self.average_frame_time);
+        self.frame_time_display_cooldown += dt.as_secs_f32();
+        if self.frame_time_display_cooldown > 1.0 {
+            self.frame_time_display_cooldown = 0.0;
+            dbg!(self.average_frame_time);
+        }
 
         let state = FrameState {
             mouse: &self.mouse_state,
@@ -739,10 +750,6 @@ impl Rendertoy {
 
         let mut running = true;
         while running {
-            // TODO: reset descriptor pool for the current frame
-            // TODO: reset atomics in dynamic uniform buffers
-            // TODO: vk_begin_frame(present_image_index);
-
             swapchain_acquired_semaphore_idx =
                 (swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
 

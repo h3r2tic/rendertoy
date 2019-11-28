@@ -142,13 +142,12 @@ async fn resolve(
     //
     try_join_all(uniforms.into_iter().map(|u| {
         let ctx = ctx.clone();
-        tokio::executor::Executor::spawn_with_handle(
-            &mut tokio::executor::DefaultExecutor::current(),
-            async move { u.resolve(ctx).await },
-        )
-        .expect("failed to spawn_with_handle()")
+        tokio::task::spawn(async move { u.resolve(ctx).await })
     }))
     .await
+    .expect("tokio join error")
+    .into_iter()
+    .collect()
 }
 
 #[macro_export]
@@ -511,36 +510,35 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
     let spirv_binary = spirv.as_binary();
 
     /*{
-        use std::io::Write;
-        use std::process::{Command, Stdio};
+            use std::io::Write;
+            use std::process::{Command, Stdio};
 
-        {
-            use std::fs::File;
-use std::io::prelude::*;
+            {
+                use std::fs::File;
+    use std::io::prelude::*;
 
-            let mut file = File::create("tmp/".to_owned() + &name + ".spv").unwrap();
-            file.write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
-        }
+                let mut file = File::create("tmp/".to_owned() + &name + ".spv").unwrap();
+                file.write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
+            }
 
-        /*let mut child = Command::new("C:\\prog\\shaderc\\bin\\spirv-opt.exe").arg("-").arg("-o").arg("-").stdin(Stdio::piped())
-        //.stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+            /*let mut child = Command::new("C:\\prog\\shaderc\\bin\\spirv-opt.exe").arg("-").arg("-o").arg("-").stdin(Stdio::piped())
+            //.stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
 
-    child.stdin
-        .as_mut()
-        .ok_or("Child process stdin has not been captured!").unwrap()
-        .write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
+        child.stdin
+            .as_mut()
+            .ok_or("Child process stdin has not been captured!").unwrap()
+            .write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
 
-        let output = child.wait_with_output()?;*/
-    }*/
+            let output = child.wait_with_output()?;*/
+        }*/
 
     let refl = reflect_spirv_shader(spirv_binary)?;
     let local_size = get_cs_local_size_from_spirv(spirv_binary)?;
 
     let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
-    let pipeline =
-        create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv_binary)?;
+    let pipeline = create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv_binary)?;
 
     //let reflection = reflect_shader(gfx, handle);
     // TODO

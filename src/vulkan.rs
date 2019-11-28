@@ -170,8 +170,8 @@ pub struct VkKitchenSink {
     pub device_properties: vk::PhysicalDeviceProperties,
     pub surface_loader: Surface,
     pub swapchain_loader: Swapchain,
-    pub debug_report_loader: DebugReport,
-    pub debug_call_back: vk::DebugReportCallbackEXT,
+    pub debug_report_loader: Option<DebugReport>,
+    pub debug_call_back: Option<vk::DebugReportCallbackEXT>,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -242,7 +242,7 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
 
     let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
         .pool_sizes(&descriptor_sizes)
-        .max_sets(1 << 20);
+        .max_sets(1 << 16);
 
     unsafe {
         device
@@ -333,7 +333,7 @@ fn set_stable_power_state(find_luid: &[u8]) {
 }*/
 
 impl VkKitchenSink {
-    pub fn new(window: &winit::Window) -> Result<Self, Box<dyn Error>> {
+    pub fn new(window: &winit::Window, graphics_debugging: bool) -> Result<Self, Box<dyn Error>> {
         unsafe {
             let entry = ash::Entry::new()?;
             let surface_extensions = ash_window::enumerate_required_extensions(window)?;
@@ -342,7 +342,12 @@ impl VkKitchenSink {
                 .map(|ext| ext.as_ptr())
                 .chain(extension_names().into_iter())
                 .collect::<Vec<_>>();
-            let layer_names = [CString::new("VK_LAYER_LUNARG_standard_validation").unwrap()];
+
+            let mut layer_names = Vec::new();
+            if graphics_debugging {
+                layer_names.push(CString::new("VK_LAYER_LUNARG_standard_validation").unwrap());
+            }
+
             let layers_names_raw: Vec<*const i8> = layer_names
                 .iter()
                 .map(|raw_name| raw_name.as_ptr())
@@ -366,10 +371,21 @@ impl VkKitchenSink {
                 )
                 .pfn_callback(Some(vulkan_debug_callback));
 
-            let debug_report_loader = DebugReport::new(&entry, &instance);
-            let debug_call_back = debug_report_loader
-                .create_debug_report_callback(&debug_info, None)
-                .unwrap();
+            let debug_report_loader;
+            let debug_call_back;
+
+            if (graphics_debugging) {
+                let loader = DebugReport::new(&entry, &instance);
+                debug_call_back = Some(
+                    loader
+                        .create_debug_report_callback(&debug_info, None)
+                        .unwrap(),
+                );
+                debug_report_loader = Some(loader);
+            } else {
+                debug_report_loader = None;
+                debug_call_back = None;
+            }
 
             // Create a surface from winit window.
             let surface = ash_window::create_surface(&entry, &instance, window, None)?;
@@ -754,8 +770,10 @@ impl Drop for VkKitchenSink {
                 .destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
-            self.debug_report_loader
-                .destroy_debug_report_callback(self.debug_call_back, None);
+            if let Some(debug_report_loader) = self.debug_report_loader.as_ref() {
+                debug_report_loader
+                    .destroy_debug_report_callback(self.debug_call_back.unwrap(), None);
+            }
             self.instance.destroy_instance(None);
         }
     }
@@ -781,6 +799,11 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
                 vk::CommandBufferResetFlags::RELEASE_RESOURCES,
             )
             .expect("Reset command buffer failed.");
+
+        device.reset_descriptor_pool(
+            *vk_frame().descriptor_pool.lock().unwrap(),
+            Default::default(),
+        );
 
         let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
