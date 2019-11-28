@@ -313,13 +313,16 @@ fn get_shader_text(source: &[shader_prepper::SourceChunk]) -> String {
 fn shaderc_compile_glsl(
     shader_name: &str,
     source: &[shader_prepper::SourceChunk],
-) -> shaderc::CompilationArtifact {
+) -> Result<shaderc::CompilationArtifact> {
     use shaderc;
     let source = get_shader_text(source);
     shaderc_compile_glsl_str(shader_name, &source)
 }
 
-fn shaderc_compile_glsl_str(shader_name: &str, source: &str) -> shaderc::CompilationArtifact {
+fn shaderc_compile_glsl_str(
+    shader_name: &str,
+    source: &str,
+) -> Result<shaderc::CompilationArtifact> {
     use shaderc;
 
     let mut compiler = shaderc::Compiler::new().unwrap();
@@ -336,11 +339,12 @@ fn shaderc_compile_glsl_str(shader_name: &str, source: &str) -> shaderc::Compila
             "main",
             Some(&options),
         )
-        .expect(&format!("{}::compile_into_spirv", shader_name));
+        //.expect(&format!("{}::compile_into_spirv", shader_name));
+        ?;
 
     assert_eq!(Some(&0x07230203), binary_result.as_binary().first());
 
-    binary_result
+    Ok(binary_result)
 }
 
 pub struct ComputePipeline {
@@ -506,7 +510,7 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or("unknown".to_string());
 
-    let spirv = shaderc_compile_glsl(&name, &source);
+    let spirv = shaderc_compile_glsl(&name, &source)?;
     let spirv_binary = spirv.as_binary();
 
     /*{
@@ -568,7 +572,7 @@ pub async fn load_cs_from_string(
         line_offset: 0,
     }];
 
-    let spirv = shaderc_compile_glsl(name, &source);
+    let spirv = shaderc_compile_glsl(name, &source)?;
     let refl = reflect_spirv_shader(spirv.as_binary())?;
     let local_size = get_cs_local_size_from_spirv(spirv.as_binary())?;
 
