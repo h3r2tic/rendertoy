@@ -61,6 +61,7 @@ pub struct Texture {
     pub view: vk::ImageView,
     pub storage_view: vk::ImageView,
     pub key: TextureKey,
+    pub bindless_index: u32,
     _allocation: SharedTransientAllocation,
 }
 
@@ -70,6 +71,7 @@ pub struct ImageResource {
     view: vk::ImageView,
     storage_view: vk::ImageView,
     memory: vk::DeviceMemory,
+    bindless_index: u32,
 }
 
 impl ImageResource {
@@ -77,10 +79,9 @@ impl ImageResource {
         ImageResource {
             image: vk::Image::null(),
             view: vk::ImageView::null(),
-
             storage_view: vk::ImageView::null(),
-
             memory: vk::DeviceMemory::null(),
+            bindless_index: std::u32::MAX,
         }
     }
 
@@ -187,6 +188,7 @@ impl TransientResource for Texture {
             view: allocation.payload.view,
             storage_view: allocation.payload.storage_view,
             key: desc,
+            bindless_index: allocation.payload.bindless_index,
             _allocation: allocation,
         }
     }
@@ -210,6 +212,7 @@ impl TransientResource for Texture {
                 | vk::ImageUsageFlags::STORAGE,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
+
         img.create_view(
             vk::ImageViewType::TYPE_2D,
             format,
@@ -223,6 +226,8 @@ impl TransientResource for Texture {
                 layer_count: 1,
             },
         );
+
+        img.bindless_index = unsafe { vk_all() }.register_image_bindless_index(img.view);
 
         img
         /*unsafe {

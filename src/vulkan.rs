@@ -174,6 +174,10 @@ pub struct VkKitchenSink {
     pub samplers: [vk::Sampler; 1],
 
     pub allocator: vk_mem::Allocator,
+    pub bindless_buffers_descriptor_set: vk::DescriptorSet,
+    pub bindless_buffers_next_descriptor: std::sync::atomic::AtomicU32,
+    pub bindless_images_descriptor_set: vk::DescriptorSet,
+    pub bindless_images_next_descriptor: std::sync::atomic::AtomicU32,
 
     pub frame_data: Vec<VkFrameData>,
 
@@ -643,6 +647,15 @@ impl VkKitchenSink {
                 })
                 .collect();
 
+            let bindless_buffers_descriptor_set = Self::create_bindless_resource_descriptor_set(
+                &device,
+                vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+            );
+            let bindless_images_descriptor_set = Self::create_bindless_resource_descriptor_set(
+                &device,
+                vk::DescriptorType::SAMPLED_IMAGE,
+            );
+
             Ok(Self {
                 entry,
                 instance,
@@ -662,12 +675,61 @@ impl VkKitchenSink {
                 frame_data,
                 surface,
                 allocator,
+                bindless_buffers_descriptor_set,
+                bindless_buffers_next_descriptor: std::sync::atomic::AtomicU32::new(0),
+                bindless_images_descriptor_set,
+                bindless_images_next_descriptor: std::sync::atomic::AtomicU32::new(0),
                 debug_call_back,
                 debug_report_loader,
                 window_width: physical_dimensions.width as u32,
                 window_height: physical_dimensions.height as u32,
             })
         }
+    }
+
+    pub(crate) fn register_image_bindless_index(&self, view: vk::ImageView) -> u32 {
+        let idx = self
+            .bindless_images_next_descriptor
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        unsafe {
+            self.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::builder()
+                    .dst_set(self.bindless_images_descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(idx)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(&[vk::DescriptorImageInfo::builder()
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_view(view)
+                        .build()])
+                    .build()],
+                &[],
+            )
+        }
+
+        idx
+    }
+
+    pub(crate) fn register_buffer_bindless_index(&self, view: vk::BufferView) -> u32 {
+        let idx = self
+            .bindless_buffers_next_descriptor
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        unsafe {
+            self.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::builder()
+                    .dst_set(self.bindless_buffers_descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(idx)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
+                    .texel_buffer_view(&[view])
+                    .build()],
+                &[],
+            )
+        }
+
+        idx
     }
 
     pub(crate) fn create_present_descriptor_sets(
@@ -710,6 +772,55 @@ impl VkKitchenSink {
                 .unwrap();
 
             descriptor_sets
+        }
+    }
+
+    fn create_bindless_resource_descriptor_set(
+        device: &Device,
+        descriptor_type: vk::DescriptorType,
+    ) -> vk::DescriptorSet {
+        let desc_count = 1 << 20;
+
+        unsafe {
+            let descriptor_set_layout = unsafe {
+                device
+                    .create_descriptor_set_layout(
+                        &vk::DescriptorSetLayoutCreateInfo::builder()
+                            .bindings(&[vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(desc_count)
+                                .descriptor_type(descriptor_type)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(0)
+                                .build()])
+                            .build(),
+                        None,
+                    )
+                    .unwrap()
+            };
+
+            let descriptor_sizes = [vk::DescriptorPoolSize {
+                ty: descriptor_type,
+                descriptor_count: desc_count,
+            }];
+
+            let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+                .pool_sizes(&descriptor_sizes)
+                .max_sets(1);
+
+            let descriptor_pool = device
+                .create_descriptor_pool(&descriptor_pool_info, None)
+                .unwrap();
+
+            let descriptor_sets = device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::builder()
+                        .descriptor_pool(descriptor_pool)
+                        .set_layouts(&vec![descriptor_set_layout])
+                        .build(),
+                )
+                .unwrap();
+
+            descriptor_sets[0]
         }
     }
 

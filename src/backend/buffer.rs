@@ -23,6 +23,7 @@ pub struct BufferAllocation {
     buffer: vk::Buffer,
     allocation: vk_mem::Allocation,
     allocation_info: vk_mem::AllocationInfo,
+    bindless_index: u32,
 }
 
 #[derive(Clone)]
@@ -30,6 +31,7 @@ pub struct Buffer {
     pub view: vk::BufferView,
     pub buffer: vk::Buffer,
     pub key: BufferKey,
+    pub bindless_index: u32,
     _allocation: SharedTransientAllocation,
 }
 
@@ -45,6 +47,7 @@ impl TransientResource for Buffer {
             view: allocation.payload.view,
             buffer: allocation.payload.buffer,
             key: desc,
+            bindless_index: allocation.payload.bindless_index,
             _allocation: allocation,
         }
     }
@@ -85,11 +88,14 @@ impl TransientResource for Buffer {
                 .create_buffer_view(&view_info.build(), None)
                 .expect("create_buffer_view");
 
+            let bindless_index = vk_all().register_buffer_bindless_index(view);
+
             BufferAllocation {
                 view,
                 buffer,
                 allocation,
                 allocation_info,
+                bindless_index,
             }
         }
     }
