@@ -95,6 +95,11 @@ impl ImageResource {
         memory_flags: vk::MemoryPropertyFlags,
     ) {
         unsafe {
+            let mem_info = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::GpuOnly,
+                ..Default::default()
+            };
+
             let mut create_info = vk::ImageCreateInfo::builder()
                 .image_type(image_type)
                 .format(storage_format)
@@ -109,27 +114,12 @@ impl ImageResource {
                 .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
                 .build();
 
-            self.image = vk_device().create_image(&create_info, None).unwrap();
+            let (image, _allocation, _allocation_info) = vk_all()
+                .allocator
+                .create_image(&create_info, &mem_info)
+                .unwrap();
 
-            let requirements = vk_device().get_image_memory_requirements(self.image);
-            let memory_index = find_memorytype_index(
-                &requirements,
-                &vk_all().device_memory_properties,
-                memory_flags,
-            )
-            .expect("Unable to find suitable memory index image.");
-
-            let allocate_info = vk::MemoryAllocateInfo {
-                allocation_size: requirements.size,
-                memory_type_index: memory_index,
-                ..Default::default()
-            };
-
-            self.memory = vk_device().allocate_memory(&allocate_info, None).unwrap();
-
-            vk_device()
-                .bind_image_memory(self.image, self.memory, 0)
-                .expect("Unable to bind image memory");
+            self.image = image;
         }
     }
 

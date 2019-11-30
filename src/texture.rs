@@ -96,45 +96,31 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
         sharing_mode: vk::SharingMode::EXCLUSIVE,
         ..Default::default()
     };
-    let image_buffer = unsafe { device.create_buffer(&image_buffer_info, None).unwrap() };
-    let image_buffer_memory_req = unsafe { device.get_buffer_memory_requirements(image_buffer) };
-    let image_buffer_memory_index = find_memorytype_index(
-        &image_buffer_memory_req,
-        &unsafe { vk_all().device_memory_properties },
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    )
-    .expect("Unable to find suitable memorytype for the vertex buffer.");
 
-    let image_buffer_allocate_info = vk::MemoryAllocateInfo {
-        allocation_size: image_buffer_memory_req.size,
-        memory_type_index: image_buffer_memory_index,
+    let buffer_mem_info = vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::CpuToGpu,
         ..Default::default()
     };
 
+    let (image_buffer, buffer_allocation, buffer_allocation_info) = unsafe { vk_all() }
+        .allocator
+        .create_buffer(&image_buffer_info, &buffer_mem_info)
+        .expect("vma::create_buffer");
+
     unsafe {
-        let image_buffer_memory = device
-            .allocate_memory(&image_buffer_allocate_info, None)
-            .unwrap();
-        let image_ptr = unsafe {
-            device.map_memory(
-                image_buffer_memory,
-                0,
-                image_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-        }
-        .unwrap();
+        let image_ptr = vk_all()
+            .allocator
+            .map_memory(&buffer_allocation)
+            .expect("mapping an image upload buffer failed")
+            as *mut std::ffi::c_void;
         let mut image_slice = Align::new(
             image_ptr,
             std::mem::align_of::<u8>() as u64,
-            image_buffer_memory_req.size,
+            buffer_allocation_info.get_size() as u64,
         );
 
         image_slice.copy_from_slice(&image_data);
-        device.unmap_memory(image_buffer_memory);
-        device
-            .bind_buffer_memory(image_buffer, image_buffer_memory, 0)
-            .unwrap();
+        vk_all().allocator.unmap_memory(&buffer_allocation);
     }
 
     let res = backend::texture::create_texture(TextureKey {
