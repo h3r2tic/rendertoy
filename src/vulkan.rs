@@ -216,7 +216,7 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::SAMPLER,
-            descriptor_count: 1 << 20,
+            descriptor_count: 4,
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
@@ -224,6 +224,10 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+            descriptor_count: 1 << 20,
+        },
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::STORAGE_BUFFER,
             descriptor_count: 1 << 20,
         },
     ];

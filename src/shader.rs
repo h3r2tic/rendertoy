@@ -376,32 +376,28 @@ fn generate_descriptor_set_layouts(
         for binding in descriptor_set.bindings.iter() {
             use spirv_reflect::types::descriptor::ReflectDescriptorType;
 
-            match binding.descriptor_type {
-                ReflectDescriptorType::UniformBuffer => bindings.push(
+            let desc_type = match binding.descriptor_type {
+                ReflectDescriptorType::UniformBuffer => {
+                    Some(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                }
+                ReflectDescriptorType::StorageImage => Some(vk::DescriptorType::STORAGE_IMAGE),
+                ReflectDescriptorType::SampledImage => Some(vk::DescriptorType::SAMPLED_IMAGE),
+                ReflectDescriptorType::StorageBuffer => Some(vk::DescriptorType::STORAGE_BUFFER),
+                _ => {
+                    print!("\tunsupported");
+                    None
+                }
+            };
+
+            if let Some(desc_type) = desc_type {
+                bindings.push(
                     vk::DescriptorSetLayoutBinding::builder()
                         .descriptor_count(binding.count)
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                        .descriptor_type(desc_type)
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                         .binding(binding.binding)
                         .build(),
-                ),
-                ReflectDescriptorType::StorageImage => bindings.push(
-                    vk::DescriptorSetLayoutBinding::builder()
-                        .descriptor_count(binding.count)
-                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                        .binding(binding.binding)
-                        .build(),
-                ),
-                ReflectDescriptorType::SampledImage => bindings.push(
-                    vk::DescriptorSetLayoutBinding::builder()
-                        .descriptor_count(binding.count)
-                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                        .binding(binding.binding)
-                        .build(),
-                ),
-                _ => print!("\tunsupported"),
+                );
             }
         }
 
@@ -1098,6 +1094,28 @@ fn update_descriptor_sets(
                                     .image_info(image_info)
                                     .build(),
                             )
+                        }
+                    }
+                    ReflectDescriptorType::StorageBuffer => {
+                        if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
+                            uniforms.get(&binding.type_description.as_ref().unwrap().type_name)
+                        {
+                            let buffer_info = [vk::DescriptorBufferInfo::builder()
+                                .buffer(value.buffer)
+                                .range(vk::WHOLE_SIZE)
+                                .build()];
+                            ds_buffer_info.push(buffer_info);
+                            let buffer_info = ds_buffer_info.last().unwrap();
+
+                            ds_writes.push(
+                                vk::WriteDescriptorSet::builder()
+                                    .dst_set(ds)
+                                    .dst_binding(binding.binding)
+                                    .dst_array_element(0)
+                                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                    .buffer_info(buffer_info)
+                                    .build(),
+                            );
                         }
                     }
                     _ => print!("\tunsupported"),

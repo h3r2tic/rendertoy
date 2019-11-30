@@ -1,23 +1,34 @@
 use super::transient_resource::*;
+use crate::{vk, vulkan::*};
+use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct BufferKey {
     pub size_bytes: usize,
-    pub texture_format: Option<u32>,
+    pub texture_format: Option<i32>,
+}
+
+impl BufferKey {
+    pub fn new(size_bytes: usize, texture_format: Option<vk::Format>) -> Self {
+        Self {
+            size_bytes,
+            texture_format: texture_format.map(|fmt| fmt.as_raw()),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct BufferAllocation {
-    buffer_id: u32,
-    texture_id: Option<u32>,
-    bindless_texture_handle: Option<u64>,
+    view: vk::BufferView,
+    buffer: vk::Buffer,
+    allocation: vk_mem::Allocation,
+    allocation_info: vk_mem::AllocationInfo,
 }
 
 #[derive(Clone)]
 pub struct Buffer {
-    pub buffer_id: u32,
-    pub texture_id: Option<u32>,
-    pub bindless_texture_handle: Option<u64>,
+    pub view: vk::BufferView,
+    pub buffer: vk::Buffer,
     pub key: BufferKey,
     _allocation: SharedTransientAllocation,
 }
@@ -31,47 +42,56 @@ impl TransientResource for Buffer {
         allocation: std::sync::Arc<TransientResourceAllocation<BufferKey, BufferAllocation>>,
     ) -> Self {
         Self {
-            buffer_id: allocation.payload.buffer_id,
-            texture_id: allocation.payload.texture_id,
-            bindless_texture_handle: allocation.payload.bindless_texture_handle,
+            view: allocation.payload.view,
+            buffer: allocation.payload.buffer,
             key: desc,
             _allocation: allocation,
         }
     }
 
     fn allocate_payload(key: BufferKey) -> BufferAllocation {
-        /*unsafe {
-            let mut buffer_id = 0;
-            gl.GenBuffers(1, &mut buffer_id);
-            gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, buffer_id);
+        unsafe {
+            let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::UNIFORM_BUFFER
+                | vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_DST;
 
-            gl.BufferStorage(
-                gl::SHADER_STORAGE_BUFFER,
-                key.size_bytes as isize,
-                std::ptr::null(),
-                gl::DYNAMIC_STORAGE_BIT,
-            );
+            let mem_info = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::GpuOnly,
+                ..Default::default()
+            };
 
-            let tex = key.texture_format.map(|internal_format| {
-                let mut texture_id = 0u32;
-                gl.GenTextures(1, &mut texture_id);
-                gl.BindTexture(gl::TEXTURE_BUFFER, texture_id);
-                gl.TexBuffer(gl::TEXTURE_BUFFER, internal_format, buffer_id);
-                gl.BindTexture(gl::TEXTURE_BUFFER, 0);
+            let (buffer, allocation, allocation_info) = unsafe {
+                let buffer_info = vk::BufferCreateInfo::builder()
+                    .size(key.size_bytes as u64)
+                    .usage(usage)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .build();
 
-                let bindless_texture_handle: u64 = gl.GetTextureHandleARB(texture_id);
-                gl.MakeTextureHandleResidentARB(bindless_texture_handle);
+                vk_all()
+                    .allocator
+                    .create_buffer(&buffer_info, &mem_info)
+                    .expect("vma::create_buffer")
+            };
 
-                (texture_id, bindless_texture_handle)
-            });
+            let view_format =
+                vk::Format::from_raw(key.texture_format.unwrap_or(vk::Format::R8_UNORM.as_raw()));
+
+            let view_info = vk::BufferViewCreateInfo::builder()
+                .buffer(buffer)
+                .format(view_format)
+                .range(key.size_bytes as u64);
+            let view = vk_device()
+                .create_buffer_view(&view_info.build(), None)
+                .expect("create_buffer_view");
 
             BufferAllocation {
-                buffer_id,
-                texture_id: tex.map(|t| t.0),
-                bindless_texture_handle: tex.map(|t| t.1),
+                view,
+                buffer,
+                allocation,
+                allocation_info,
             }
-        }*/
-        unimplemented!()
+        }
     }
 }
 

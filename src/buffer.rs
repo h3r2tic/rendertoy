@@ -1,6 +1,7 @@
 pub use crate::backend::buffer::{Buffer, BufferKey};
 use crate::backend::{self};
-use crate::vk;
+use crate::{vk, vulkan::*};
+use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
 
 use snoozy::*;
 use std::mem::size_of;
@@ -96,34 +97,74 @@ pub fn upload_array_buffer_impl<
     T: Sized + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    gfx: &crate::Gfx,
     _ctx: Context,
     contents: &C,
-    texture_format: Option<u32>,
+    texture_format: Option<vk::Format>,
 ) -> Result<Buffer> {
-    /*let size_of_t = size_of::<T>();
+    let size_of_t = size_of::<T>();
 
-    let res = backend::buffer::create_buffer(
-        gl,
-        BufferKey {
-            size_bytes: contents.len() * size_of_t,
-            texture_format,
-        },
-    );
+    let size_bytes = contents.len() * size_of_t;
+    let res = backend::buffer::create_buffer(BufferKey::new(size_bytes, texture_format));
+
+    // TODO
+    let (staging_buffer, staging_allocation, staging_allocation_info) = unsafe {
+        let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::TRANSFER_SRC;
+
+        let mem_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::CpuToGpu,
+            ..Default::default()
+        };
+
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size_bytes as u64)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .build();
+
+        vk_all()
+            .allocator
+            .create_buffer(&buffer_info, &mem_info)
+            .expect("vma::create_buffer")
+    };
+
+    //(contents.len() * size_of_t) as isize,
+    //contents.as_ptr() as *const T as *const std::ffi::c_void,
 
     unsafe {
-        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-        gl.BufferSubData(
-            gl::SHADER_STORAGE_BUFFER,
-            0,
-            (contents.len() * size_of_t) as isize,
-            contents.as_ptr() as *const T as *const std::ffi::c_void,
+        let mapped_ptr = vk_all()
+            .allocator
+            .map_memory(&staging_allocation)
+            .expect("mapping a staging buffer failed")
+            as *mut std::ffi::c_void;
+
+        std::slice::from_raw_parts_mut(mapped_ptr as *mut u8, size_bytes).copy_from_slice(
+            &std::slice::from_raw_parts(contents.as_ptr() as *const u8, size_bytes),
         );
-        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
+        vk_all().allocator.unmap_memory(&staging_allocation);
     }
 
-    Ok(res)*/
-    unimplemented!()
+    let copy_dst_buffer = res.buffer;
+    vk_add_setup_command(move |vk_all, vk_frame| {
+        let cb = vk_frame.command_buffer.lock().unwrap();
+        let cb: vk::CommandBuffer = cb.cb;
+
+        let buffer_copy_regions = vk::BufferCopy::builder().size(size_bytes as u64);
+
+        unsafe {
+            vk_all.device.cmd_copy_buffer(
+                cb,
+                staging_buffer,
+                copy_dst_buffer,
+                &[buffer_copy_regions.build()],
+            );
+        };
+
+        // TODO: barrier
+    });
+
+    // TODO: free the staging buffer
+
+    Ok(res)
 }
 
 #[snoozy]
@@ -134,8 +175,7 @@ pub async fn upload_array_buffer<
     ctx: Context,
     contents: &C,
 ) -> Result<Buffer> {
-    //with_gl(|gl| upload_array_buffer_impl(gfx, ctx, contents, None))
-    unimplemented!()
+    upload_array_buffer_impl(ctx, contents, None)
 }
 
 #[snoozy]
