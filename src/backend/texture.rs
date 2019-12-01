@@ -209,7 +209,8 @@ impl TransientResource for Texture {
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::SAMPLED
                 | vk::ImageUsageFlags::TRANSFER_DST
-                | vk::ImageUsageFlags::STORAGE,
+                | vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
 

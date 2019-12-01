@@ -601,10 +601,8 @@ pub async fn load_cs_from_string(
     load_cs_impl(name, &source)
 }
 
-// TODO: spirv_reflect::ShaderModule is probably not proper Clone
-#[derive(Clone)]
 pub struct RasterSubShader {
-    module: spirv_reflect::ShaderModule,
+    module: spirv_reflect::ShaderModule, // Note: spirv_reflect::ShaderModule should not be Clone! It uses a Drop which will corrupt heap if cloned
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
     stage_flags: vk::ShaderStageFlags,
 }
@@ -687,8 +685,9 @@ pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
 
 pub struct RasterPipeline {
     pipeline: vk::Pipeline,
-    shaders: Vec<RasterSubShader>,
+    shaders: Vec<std::pin::Pin<std::sync::Arc<RasterSubShader>>>,
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+    pipeline_layout: vk::PipelineLayout,
 }
 
 #[snoozy]
@@ -908,11 +907,9 @@ pub async fn make_raster_pipeline(
         let graphic_pipeline = graphics_pipelines[0];
         Ok(RasterPipeline {
             pipeline: graphic_pipeline,
-            shaders: shaders
-                .iter()
-                .map(|s| -> RasterSubShader { (**s).clone() })
-                .collect(),
+            shaders: shaders,
             descriptor_set_layouts,
+            pipeline_layout,
         })
     }
 }
@@ -1178,9 +1175,9 @@ struct DescritorSetUpdateResult {
     all_buffers_descriptor_set_idx: Option<usize>,
 }
 
-fn update_descriptor_sets(
+fn update_descriptor_sets<'a>(
     device: &Device,
-    refl: &spirv_reflect::ShaderModule,
+    refl: impl Iterator<Item = &'a spirv_reflect::ShaderModule>,
     descriptor_sets: &[vk::DescriptorSet],
     uniforms: &HashMap<String, ResolvedShaderUniformValue>,
 ) -> std::result::Result<DescritorSetUpdateResult, &'static str> {
@@ -1201,200 +1198,209 @@ fn update_descriptor_sets(
         pub static CACHE: Cache = Default::default();
     }
 
+    // TODO: could be multiple between different stages
     let mut all_buffers_descriptor_set_idx = None;
 
-    CACHE.with(|cache| {
-        let mut ds_image_info = cache.ds_image_info.borrow_mut();
-        let mut ds_buffer_info = cache.ds_buffer_info.borrow_mut();
-        let mut ds_buffer_views = cache.ds_buffer_views.borrow_mut();
+    for refl in refl {
+        CACHE.with(|cache| -> std::result::Result<(), &'static str> {
+            let mut ds_image_info = cache.ds_image_info.borrow_mut();
+            let mut ds_buffer_info = cache.ds_buffer_info.borrow_mut();
+            let mut ds_buffer_views = cache.ds_buffer_views.borrow_mut();
 
-        ds_image_info.clear();
-        ds_image_info.reserve(uniforms.len());
+            ds_image_info.clear();
+            ds_image_info.reserve(uniforms.len());
 
-        ds_buffer_info.clear();
-        ds_buffer_info.reserve(uniforms.len());
+            ds_buffer_info.clear();
+            ds_buffer_info.reserve(uniforms.len());
 
-        ds_buffer_views.clear();
-        ds_buffer_views.reserve(uniforms.len());
+            ds_buffer_views.clear();
+            ds_buffer_views.reserve(uniforms.len());
 
-        let entry = Some("main");
-        for (ds_idx, descriptor_set) in refl.enumerate_descriptor_sets(entry)?.iter().enumerate() {
-            let ds = descriptor_sets[0];
-            for binding in descriptor_set.bindings.iter() {
-                use spirv_reflect::types::descriptor::ReflectDescriptorType;
+            let entry = Some("main");
+            for (ds_idx, descriptor_set) in
+                refl.enumerate_descriptor_sets(entry)?.iter().enumerate()
+            {
+                let ds = descriptor_sets[0];
+                for binding in descriptor_set.bindings.iter() {
+                    use spirv_reflect::types::descriptor::ReflectDescriptorType;
 
-                match binding.descriptor_type {
-                    ReflectDescriptorType::UniformBuffer => {
-                        let buffer_bytes = binding.block.size as usize;
-                        let (buffer_handle, buffer_offset, buffer_contents) = unsafe { vk_frame() }
-                            .uniforms
-                            .allocate(buffer_bytes)
-                            .expect("failed to allocate uniform buffer");
+                    match binding.descriptor_type {
+                        ReflectDescriptorType::UniformBuffer => {
+                            let buffer_bytes = binding.block.size as usize;
+                            let (buffer_handle, buffer_offset, buffer_contents) =
+                                unsafe { vk_frame() }
+                                    .uniforms
+                                    .allocate(buffer_bytes)
+                                    .expect("failed to allocate uniform buffer");
 
-                        for member in binding.block.members.iter() {
-                            if let Some(value) = uniforms.get(&member.name) {
-                                let dst_mem = &mut buffer_contents[member.absolute_offset as usize
-                                    ..(member.absolute_offset + member.size) as usize];
+                            for member in binding.block.members.iter() {
+                                if let Some(value) = uniforms.get(&member.name) {
+                                    let dst_mem = &mut buffer_contents[member.absolute_offset
+                                        as usize
+                                        ..(member.absolute_offset + member.size) as usize];
 
-                                match value {
-                                    ResolvedShaderUniformValue::Float32(value)
-                                    | ResolvedShaderUniformValue::Float32Asset(value) => {
-                                        dst_mem.copy_from_slice(&(*value).to_ne_bytes());
-                                    }
-                                    ResolvedShaderUniformValue::Uint32(value)
-                                    | ResolvedShaderUniformValue::Uint32Asset(value) => {
-                                        dst_mem.copy_from_slice(&(*value).to_ne_bytes());
-                                    }
-                                    ResolvedShaderUniformValue::Int32(value) => {
-                                        dst_mem.copy_from_slice(&(*value).to_ne_bytes());
-                                    }
-                                    ResolvedShaderUniformValue::Ivec2(value) => {
-                                        dst_mem.copy_from_slice(unsafe {
-                                            std::slice::from_raw_parts(
-                                                std::mem::transmute(&value.0 as *const i32),
-                                                2 * 4,
-                                            )
-                                        });
-                                    }
-                                    ResolvedShaderUniformValue::Vec4(value) => {
-                                        dst_mem.copy_from_slice(unsafe {
-                                            std::slice::from_raw_parts(
-                                                std::mem::transmute(&value.0 as *const f32),
-                                                4 * 4,
-                                            )
-                                        });
-                                    }
-                                    _ => {
-                                        dbg!(member);
-                                        unimplemented!();
+                                    match value {
+                                        ResolvedShaderUniformValue::Float32(value)
+                                        | ResolvedShaderUniformValue::Float32Asset(value) => {
+                                            dst_mem.copy_from_slice(&(*value).to_ne_bytes());
+                                        }
+                                        ResolvedShaderUniformValue::Uint32(value)
+                                        | ResolvedShaderUniformValue::Uint32Asset(value) => {
+                                            dst_mem.copy_from_slice(&(*value).to_ne_bytes());
+                                        }
+                                        ResolvedShaderUniformValue::Int32(value) => {
+                                            dst_mem.copy_from_slice(&(*value).to_ne_bytes());
+                                        }
+                                        ResolvedShaderUniformValue::Ivec2(value) => {
+                                            dst_mem.copy_from_slice(unsafe {
+                                                std::slice::from_raw_parts(
+                                                    std::mem::transmute(&value.0 as *const i32),
+                                                    2 * 4,
+                                                )
+                                            });
+                                        }
+                                        ResolvedShaderUniformValue::Vec4(value) => {
+                                            dst_mem.copy_from_slice(unsafe {
+                                                std::slice::from_raw_parts(
+                                                    std::mem::transmute(&value.0 as *const f32),
+                                                    4 * 4,
+                                                )
+                                            });
+                                        }
+                                        _ => {
+                                            dbg!(member);
+                                            unimplemented!();
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        let buffer_info = [vk::DescriptorBufferInfo::builder()
-                            .buffer(buffer_handle)
-                            .range(buffer_bytes as u64)
-                            .build()];
-                        ds_buffer_info.push(buffer_info);
-                        let buffer_info = ds_buffer_info.last().unwrap();
-
-                        ds_offsets.push(buffer_offset as u32);
-                        ds_writes.push(
-                            vk::WriteDescriptorSet::builder()
-                                .dst_set(ds)
-                                .dst_binding(binding.binding)
-                                .dst_array_element(0)
-                                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-                                .buffer_info(buffer_info)
-                                .build(),
-                        );
-                    }
-                    ReflectDescriptorType::SampledImage => {
-                        if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =
-                            uniforms.get(&binding.name)
-                        {
-                            let image_info = [vk::DescriptorImageInfo::builder()
-                                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                .image_view(value.view)
-                                .build()];
-                            ds_image_info.push(image_info);
-                            let image_info = ds_image_info.last().unwrap();
-
-                            ds_writes.push(
-                                vk::WriteDescriptorSet::builder()
-                                    .dst_set(ds)
-                                    .dst_binding(binding.binding)
-                                    .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                    .image_info(image_info)
-                                    .build(),
-                            )
-                        }
-                    }
-                    ReflectDescriptorType::StorageImage => {
-                        if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =
-                            uniforms.get(&binding.name)
-                        {
-                            let image_info = [vk::DescriptorImageInfo::builder()
-                                .image_layout(vk::ImageLayout::GENERAL)
-                                .image_view(value.storage_view)
-                                .build()];
-                            ds_image_info.push(image_info);
-                            let image_info = ds_image_info.last().unwrap();
-
-                            ds_writes.push(
-                                vk::WriteDescriptorSet::builder()
-                                    .dst_set(ds)
-                                    .dst_binding(binding.binding)
-                                    .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                    .image_info(image_info)
-                                    .build(),
-                            )
-                        }
-                    }
-                    ReflectDescriptorType::StorageBuffer => {
-                        if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
-                            uniforms.get(&binding.type_description.as_ref().unwrap().type_name)
-                        {
                             let buffer_info = [vk::DescriptorBufferInfo::builder()
-                                .buffer(value.buffer)
-                                .range(vk::WHOLE_SIZE)
+                                .buffer(buffer_handle)
+                                .range(buffer_bytes as u64)
                                 .build()];
                             ds_buffer_info.push(buffer_info);
                             let buffer_info = ds_buffer_info.last().unwrap();
 
+                            ds_offsets.push(buffer_offset as u32);
                             ds_writes.push(
                                 vk::WriteDescriptorSet::builder()
                                     .dst_set(ds)
                                     .dst_binding(binding.binding)
                                     .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                                     .buffer_info(buffer_info)
                                     .build(),
                             );
                         }
-                    }
-                    ReflectDescriptorType::UniformTexelBuffer => {
-                        if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
-                            uniforms.get(&binding.name)
-                        {
-                            ds_buffer_views.push([value.view]);
-                            let buffer_view = ds_buffer_views.last().unwrap();
+                        ReflectDescriptorType::SampledImage => {
+                            if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =
+                                uniforms.get(&binding.name)
+                            {
+                                let image_info = [vk::DescriptorImageInfo::builder()
+                                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                    .image_view(value.view)
+                                    .build()];
+                                ds_image_info.push(image_info);
+                                let image_info = ds_image_info.last().unwrap();
 
-                            ds_writes.push(
-                                vk::WriteDescriptorSet::builder()
-                                    .dst_set(ds)
-                                    .dst_binding(binding.binding)
-                                    .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
-                                    .texel_buffer_view(buffer_view)
-                                    .build(),
-                            );
-                        } else {
-                            if "all_buffers" == binding.name {
-                                // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
-                                all_buffers_descriptor_set_idx = Some(binding.set as usize);
-                            } else {
-                                // TODO
-                                panic!("Could not find resource to bind {}", binding.name);
+                                ds_writes.push(
+                                    vk::WriteDescriptorSet::builder()
+                                        .dst_set(ds)
+                                        .dst_binding(binding.binding)
+                                        .dst_array_element(0)
+                                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                        .image_info(image_info)
+                                        .build(),
+                                )
                             }
                         }
+                        ReflectDescriptorType::StorageImage => {
+                            if let Some(ResolvedShaderUniformValue::TextureAsset(value)) =
+                                uniforms.get(&binding.name)
+                            {
+                                let image_info = [vk::DescriptorImageInfo::builder()
+                                    .image_layout(vk::ImageLayout::GENERAL)
+                                    .image_view(value.storage_view)
+                                    .build()];
+                                ds_image_info.push(image_info);
+                                let image_info = ds_image_info.last().unwrap();
+
+                                ds_writes.push(
+                                    vk::WriteDescriptorSet::builder()
+                                        .dst_set(ds)
+                                        .dst_binding(binding.binding)
+                                        .dst_array_element(0)
+                                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                        .image_info(image_info)
+                                        .build(),
+                                )
+                            }
+                        }
+                        ReflectDescriptorType::StorageBuffer => {
+                            if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
+                                uniforms.get(&binding.type_description.as_ref().unwrap().type_name)
+                            {
+                                let buffer_info = [vk::DescriptorBufferInfo::builder()
+                                    .buffer(value.buffer)
+                                    .range(vk::WHOLE_SIZE)
+                                    .build()];
+                                ds_buffer_info.push(buffer_info);
+                                let buffer_info = ds_buffer_info.last().unwrap();
+
+                                ds_writes.push(
+                                    vk::WriteDescriptorSet::builder()
+                                        .dst_set(ds)
+                                        .dst_binding(binding.binding)
+                                        .dst_array_element(0)
+                                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                        .buffer_info(buffer_info)
+                                        .build(),
+                                );
+                            }
+                        }
+                        ReflectDescriptorType::UniformTexelBuffer => {
+                            if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
+                                uniforms.get(&binding.name)
+                            {
+                                ds_buffer_views.push([value.view]);
+                                let buffer_view = ds_buffer_views.last().unwrap();
+
+                                ds_writes.push(
+                                    vk::WriteDescriptorSet::builder()
+                                        .dst_set(ds)
+                                        .dst_binding(binding.binding)
+                                        .dst_array_element(0)
+                                        .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
+                                        .texel_buffer_view(buffer_view)
+                                        .build(),
+                                );
+                            } else {
+                                if "all_buffers" == binding.name {
+                                    // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
+                                    all_buffers_descriptor_set_idx = Some(binding.set as usize);
+                                } else {
+                                    // TODO
+                                    panic!("Could not find resource to bind {}", binding.name);
+                                }
+                            }
+                        }
+                        _ => print!("\tunsupported"),
                     }
-                    _ => print!("\tunsupported"),
                 }
             }
-        }
 
-        if !ds_writes.is_empty() {
-            unsafe { device.update_descriptor_sets(&ds_writes, &[]) };
-        }
+            if !ds_writes.is_empty() {
+                unsafe { device.update_descriptor_sets(&ds_writes, &[]) };
+            }
 
-        Ok(DescritorSetUpdateResult {
-            dynamic_offsets: ds_offsets,
-            all_buffers_descriptor_set_idx,
-        })
+            Ok(())
+        })?
+    }
+
+    Ok(DescritorSetUpdateResult {
+        dynamic_offsets: ds_offsets,
+        all_buffers_descriptor_set_idx,
     })
 }
 
@@ -1406,10 +1412,9 @@ pub async fn compute_tex(
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
     let output_tex = backend::texture::create_texture(*key);
-
     let cs = ctx.get(cs).await?;
-    let mut uniforms = resolve(ctx, uniforms.clone()).await?;
 
+    let mut uniforms = resolve(ctx, uniforms.clone()).await?;
     uniforms.push(ResolvedShaderUniformHolder {
         name: "outputTex".to_owned(),
         value: ResolvedShaderUniformValue::TextureAsset(output_tex.clone()),
@@ -1440,7 +1445,7 @@ pub async fn compute_tex(
 
         let ds_update_result = update_descriptor_sets(
             device,
-            &cs.spirv_reflection,
+            std::iter::once(&cs.spirv_reflection),
             &descriptor_sets,
             &flattened_uniforms,
         )
@@ -1560,10 +1565,99 @@ pub async fn raster_tex(
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
+    let output_tex = backend::texture::create_texture(*key);
     let raster_pipe = ctx.get(raster_pipe).await?;
 
-    unimplemented!()
+    let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
+    uniforms.push(ResolvedShaderUniformHolder {
+        name: "outputTex".to_owned(),
+        value: ResolvedShaderUniformValue::TextureAsset(output_tex.clone()),
+    });
+
+    let device = vk_device();
+    let vk_frame = unsafe { vk_frame() };
+
+    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
+    flatten_uniforms(uniforms, &mut |e| {
+        if let PlumberEvent::SetUniform { name, value } = e {
+            flattened_uniforms.insert(name, value);
+        }
+    });
+
+    let (descriptor_sets, ds_update_result) = unsafe {
+        let descriptor_sets = {
+            let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
+            let sets = device.allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::builder()
+                    .descriptor_pool(*descriptor_pool)
+                    .set_layouts(&raster_pipe.descriptor_set_layouts)
+                    .build(),
+            )?;
+            drop(descriptor_pool);
+            sets
+        };
+
+        let ds_update_result = update_descriptor_sets(
+            device,
+            raster_pipe.shaders.iter().map(|s| &s.module),
+            &descriptor_sets,
+            &flattened_uniforms,
+        )
+        .unwrap();
+
+        (descriptor_sets, ds_update_result)
+    };
+
+    let cb = vk_frame.command_buffer.lock().unwrap();
+    let cb: vk::CommandBuffer = cb.cb;
+
+    unsafe {
+        vk_all().record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                output_tex.image,
+                vk_sync::AccessType::Nothing,
+                vk_sync::AccessType::ColorAttachmentWrite,
+            )
+            .with_discard(true),
+        );
+
+        let mut descriptor_sets = descriptor_sets;
+
+        if let Some(idx) = ds_update_result.all_buffers_descriptor_set_idx {
+            descriptor_sets[idx] = vk_all().bindless_buffers_descriptor_set;
+        }
+
+        device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
+        device.cmd_bind_descriptor_sets(
+            cb,
+            vk::PipelineBindPoint::GRAPHICS,
+            raster_pipe.pipeline_layout,
+            0,
+            &descriptor_sets,
+            &ds_update_result.dynamic_offsets,
+        );
+
+        // TODO: draw
+        /*device.cmd_dispatch(
+            cb,
+            (key.width + cs.local_size.0 - 1) / cs.local_size.0,
+            (key.height + cs.local_size.1 - 1) / cs.local_size.1,
+            1,
+        );*/
+
+        vk_all().record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                output_tex.image,
+                vk_sync::AccessType::ColorAttachmentWrite,
+                vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+            ),
+        );
+    }
+
+    Ok(output_tex)
+
     /*with_gl(|gl| {
         let output_tex = backend::texture::create_texture(gfx, *key);
         let depth_buffer = create_render_buffer(
