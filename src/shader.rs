@@ -476,10 +476,12 @@ fn create_compute_pipeline(
             .stage(stage_create_info.build())
             .layout(pipeline_layout);
 
+        let t0 = std::time::Instant::now();
         // TODO: pipeline cache
         let pipeline = vk_device
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
             .expect("pipeline")[0];
+        println!("create_compute_pipelines took {:?}", t0.elapsed());
 
         Ok(ComputePipeline {
             pipeline_layout,
@@ -489,14 +491,14 @@ fn create_compute_pipeline(
 }
 
 fn get_cs_local_size_from_spirv(spirv: &[u32]) -> Result<(u32, u32, u32)> {
-    let mut loader = rspirv::mr::Loader::new();
+    let mut loader = rspirv::dr::Loader::new();
     rspirv::binary::parse_words(spirv, &mut loader).unwrap();
     let module = loader.module();
 
     for inst in module.global_inst_iter() {
         if spirv_headers::Op::ExecutionMode == inst.class.opcode {
             let local_size = &inst.operands[2..5];
-            use rspirv::mr::Operand::LiteralInt32;
+            use rspirv::dr::Operand::LiteralInt32;
 
             if let &[LiteralInt32(x), LiteralInt32(y), LiteralInt32(z)] = local_size {
                 return Ok((x, y, z));
@@ -507,6 +509,52 @@ fn get_cs_local_size_from_spirv(spirv: &[u32]) -> Result<(u32, u32, u32)> {
     }
 
     bail!("Could not find a ExecutionMode SPIR-V op");
+}
+
+// Pack descriptor sets so that they use small consecutive integers, e.g. sets [0, 5, 31] become [0, 1, 2]
+fn compact_descriptor_sets(refl: &mut spirv_reflect::ShaderModule) {
+    let entry = Some("main");
+    let sets = refl
+        .enumerate_descriptor_sets(entry)
+        .expect("enumerate_descriptor_sets");
+    let mut set_order: Vec<_> = sets.iter().enumerate().map(|(i, s)| (i, s.set)).collect();
+    set_order.sort_by_key(|(i, set_idx)| *set_idx);
+    for (new_idx, (old_idx, _)) in set_order.into_iter().enumerate() {
+        refl.change_descriptor_set_number(&sets[old_idx], new_idx as u32);
+    }
+}
+
+fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<ComputeShader> {
+    let t0 = std::time::Instant::now();
+
+    let refl = {
+        let spirv = shaderc_compile_glsl(&name, source)?;
+        println!("shaderc_compile_glsl took {:?}", t0.elapsed());
+
+        let mut refl = reflect_spirv_shader(spirv.as_binary())?;
+        compact_descriptor_sets(&mut refl);
+        refl
+    };
+
+    let spirv_binary = refl.get_code();
+
+    let local_size = get_cs_local_size_from_spirv(&spirv_binary)?;
+
+    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
+    let pipeline = create_compute_pipeline(vk_device(), &descriptor_set_layouts, &spirv_binary)?;
+
+    let reflection = ShaderReflection {
+        uniforms: Default::default(),
+    };
+
+    Ok(ComputeShader {
+        name,
+        pipeline,
+        reflection,
+        spirv_reflection: refl,
+        descriptor_set_layouts,
+        local_size,
+    })
 }
 
 #[snoozy]
@@ -525,54 +573,7 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or("unknown".to_string());
 
-    let spirv = shaderc_compile_glsl(&name, &source)?;
-    let spirv_binary = spirv.as_binary();
-
-    /*{
-            use std::io::Write;
-            use std::process::{Command, Stdio};
-
-            {
-                use std::fs::File;
-    use std::io::prelude::*;
-
-                let mut file = File::create("tmp/".to_owned() + &name + ".spv").unwrap();
-                file.write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
-            }
-
-            /*let mut child = Command::new("C:\\prog\\shaderc\\bin\\spirv-opt.exe").arg("-").arg("-o").arg("-").stdin(Stdio::piped())
-            //.stderr(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
-
-        child.stdin
-            .as_mut()
-            .ok_or("Child process stdin has not been captured!").unwrap()
-            .write_all(unsafe { std::slice::from_raw_parts(spirv_binary.as_ptr() as *const u8, spirv_binary.len() * 4) }).unwrap();
-
-            let output = child.wait_with_output()?;*/
-        }*/
-
-    let refl = reflect_spirv_shader(spirv_binary)?;
-    let local_size = get_cs_local_size_from_spirv(spirv_binary)?;
-
-    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
-    let pipeline = create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv_binary)?;
-
-    //let reflection = reflect_shader(gfx, handle);
-    // TODO
-    let reflection = ShaderReflection {
-        uniforms: Default::default(),
-    };
-
-    Ok(ComputeShader {
-        name,
-        pipeline,
-        reflection,
-        spirv_reflection: refl,
-        descriptor_set_layouts,
-        local_size,
-    })
+    load_cs_impl(name, &source)
 }
 
 #[snoozy]
@@ -587,52 +588,12 @@ pub async fn load_cs_from_string(
         line_offset: 0,
     }];
 
-    let spirv = shaderc_compile_glsl(name, &source)?;
-    let refl = reflect_spirv_shader(spirv.as_binary())?;
-    let local_size = get_cs_local_size_from_spirv(spirv.as_binary())?;
-
-    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
-    let pipeline =
-        create_compute_pipeline(vk_device(), &descriptor_set_layouts, spirv.as_binary())?;
-
     let name = std::path::Path::new(&name)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or("unknown".to_string());
 
-    //let reflection = reflect_shader(gfx, handle);
-    // TODO
-    let reflection = ShaderReflection {
-        uniforms: Default::default(),
-    };
-
-    Ok(ComputeShader {
-        name: name.clone(),
-        pipeline,
-        reflection,
-        spirv_reflection: refl,
-        descriptor_set_layouts,
-        local_size,
-    })
-
-    /*let source = [shader_prepper::SourceChunk {
-        source: source.clone(),
-        file: "no-file".to_owned(),
-        line_offset: 0,
-    }];
-
-    /*with_gl(|gl| {
-        let handle = backend::shader::make_shader(gfx, gl::COMPUTE_SHADER, &source)?;
-        let handle = backend::shader::make_program(gfx, &[handle])?;
-        let reflection = reflect_shader(gfx, handle);
-
-        Ok(ComputeShader {
-            handle,
-            name: name.clone(),
-            reflection,
-        })
-    })*/
-    unimplemented!()*/
+    load_cs_impl(name, &source)
 }
 
 pub struct RasterSubShader {
