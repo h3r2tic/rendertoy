@@ -234,6 +234,10 @@ fn allocate_frame_descriptor_pool(device: &Device) -> vk::DescriptorPool {
             ty: vk::DescriptorType::STORAGE_BUFFER,
             descriptor_count: 1 << 20,
         },
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+            descriptor_count: 1 << 20,
+        },
     ];
 
     let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
@@ -440,6 +444,7 @@ impl VkKitchenSink {
                 vk::ExtScalarBlockLayoutFn::name().as_ptr(),
                 vk::KhrMaintenance3Fn::name().as_ptr(),
                 vk::KhrGetMemoryRequirements2Fn::name().as_ptr(),
+                vk::ExtDescriptorIndexingFn::name().as_ptr(),
             ];
 
             let priorities = [1.0];
@@ -452,7 +457,12 @@ impl VkKitchenSink {
             let mut descriptor_indexing =
                 vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder()
                     .descriptor_binding_variable_descriptor_count(true)
+                    .descriptor_binding_update_unused_while_pending(true)
+                    .descriptor_binding_partially_bound(true)
                     .runtime_descriptor_array(true)
+                    .shader_uniform_texel_buffer_array_dynamic_indexing(true)
+                    .shader_uniform_texel_buffer_array_non_uniform_indexing(true)
+                    .shader_sampled_image_array_non_uniform_indexing(true)
                     .build();
 
             let mut scalar_block = vk::PhysicalDeviceScalarBlockLayoutFeaturesEXT::builder()
@@ -779,9 +789,16 @@ impl VkKitchenSink {
         device: &Device,
         descriptor_type: vk::DescriptorType,
     ) -> vk::DescriptorSet {
-        let desc_count = 1 << 20;
+        let desc_count = 1 << 18;
 
         unsafe {
+            let binding_flags = [vk::DescriptorBindingFlagsEXT::VARIABLE_DESCRIPTOR_COUNT
+                | vk::DescriptorBindingFlagsEXT::PARTIALLY_BOUND
+                | vk::DescriptorBindingFlagsEXT::UPDATE_UNUSED_WHILE_PENDING];
+            let mut binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
+                .binding_flags(&binding_flags)
+                .build();
+
             let descriptor_set_layout = unsafe {
                 device
                     .create_descriptor_set_layout(
@@ -792,6 +809,7 @@ impl VkKitchenSink {
                                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                                 .binding(0)
                                 .build()])
+                            .push_next(&mut binding_flags)
                             .build(),
                         None,
                     )

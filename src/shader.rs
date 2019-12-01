@@ -383,6 +383,9 @@ fn generate_descriptor_set_layouts(
                 ReflectDescriptorType::StorageImage => Some(vk::DescriptorType::STORAGE_IMAGE),
                 ReflectDescriptorType::SampledImage => Some(vk::DescriptorType::SAMPLED_IMAGE),
                 ReflectDescriptorType::StorageBuffer => Some(vk::DescriptorType::STORAGE_BUFFER),
+                ReflectDescriptorType::UniformTexelBuffer => {
+                    Some(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
+                }
                 _ => {
                     print!("\tunsupported");
                     None
@@ -390,14 +393,30 @@ fn generate_descriptor_set_layouts(
             };
 
             if let Some(desc_type) = desc_type {
-                bindings.push(
-                    vk::DescriptorSetLayoutBinding::builder()
-                        .descriptor_count(binding.count)
-                        .descriptor_type(desc_type)
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                        .binding(binding.binding)
-                        .build(),
-                );
+                let sub_type = *binding.type_description.as_ref().unwrap().op;
+                //println!("{:#?}", binding);
+
+                let mut binding_builder = vk::DescriptorSetLayoutBinding::builder()
+                    .descriptor_count(binding.count)
+                    .descriptor_type(desc_type)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .binding(binding.binding);
+
+                // TODO
+                if desc_type == vk::DescriptorType::UNIFORM_TEXEL_BUFFER
+                    && sub_type == spirv_headers::Op::TypeRuntimeArray
+                {
+                    binding_flags.push(
+                        vk::DescriptorBindingFlagsEXT::VARIABLE_DESCRIPTOR_COUNT
+                            | vk::DescriptorBindingFlagsEXT::PARTIALLY_BOUND
+                            | vk::DescriptorBindingFlagsEXT::UPDATE_UNUSED_WHILE_PENDING,
+                    );
+                    binding_builder = binding_builder.descriptor_count(1 << 18);
+                } else {
+                    binding_flags.push(vk::DescriptorBindingFlagsEXT::empty());
+                }
+
+                bindings.push(binding_builder.build());
             }
         }
 
@@ -962,6 +981,7 @@ fn update_descriptor_sets(
     pub struct Cache {
         ds_image_info: RefCell<Vec<[vk::DescriptorImageInfo; 1]>>,
         ds_buffer_info: RefCell<Vec<[vk::DescriptorBufferInfo; 1]>>,
+        ds_buffer_views: RefCell<Vec<[vk::BufferView; 1]>>,
     }
 
     // TODO: cache those in thread-locals
@@ -972,12 +992,16 @@ fn update_descriptor_sets(
     CACHE.with(|cache| {
         let mut ds_image_info = cache.ds_image_info.borrow_mut();
         let mut ds_buffer_info = cache.ds_buffer_info.borrow_mut();
+        let mut ds_buffer_views = cache.ds_buffer_views.borrow_mut();
 
         ds_image_info.clear();
         ds_image_info.reserve(uniforms.len());
 
         ds_buffer_info.clear();
         ds_buffer_info.reserve(uniforms.len());
+
+        ds_buffer_views.clear();
+        ds_buffer_views.reserve(uniforms.len());
 
         let entry = Some("main");
         for (ds_idx, descriptor_set) in refl.enumerate_descriptor_sets(entry)?.iter().enumerate() {
@@ -1118,6 +1142,31 @@ fn update_descriptor_sets(
                             );
                         }
                     }
+                    ReflectDescriptorType::UniformTexelBuffer => {
+                        if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
+                            uniforms.get(&binding.name)
+                        {
+                            ds_buffer_views.push([value.view]);
+                            let buffer_view = ds_buffer_views.last().unwrap();
+
+                            ds_writes.push(
+                                vk::WriteDescriptorSet::builder()
+                                    .dst_set(ds)
+                                    .dst_binding(binding.binding)
+                                    .dst_array_element(0)
+                                    .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
+                                    .texel_buffer_view(buffer_view)
+                                    .build(),
+                            );
+                        } else {
+                            if "all_buffers" == binding.name {
+                                // Nothing to do; updated elsewhere
+                            } else {
+                                // TODO
+                                panic!("Could not find resource to bind {}", binding.name);
+                            }
+                        }
+                    }
                     _ => print!("\tunsupported"),
                 }
             }
@@ -1195,6 +1244,13 @@ pub async fn compute_tex(
             )
             .with_discard(true),
         );
+
+        let mut descriptor_sets = descriptor_sets;
+
+        // TODO; "all_buffers" hack.
+        if descriptor_sets.len() == 2 {
+            descriptor_sets[1] = vk_all().bindless_buffers_descriptor_set;
+        }
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
         device.cmd_bind_descriptor_sets(

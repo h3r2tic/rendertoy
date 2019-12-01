@@ -6,43 +6,14 @@ use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
 use snoozy::*;
 use std::mem::size_of;
 
-fn upload_buffer_impl<T: Copy + Send + Sync + 'static>(
-    gfx: &crate::Gfx,
+#[snoozy]
+pub async fn upload_buffer<T: Sized + Copy + Send + Sync + 'static>(
     _ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
-    /*let size_of_t = size_of::<T>();
-
-    let res = backend::buffer::create_buffer(
-        gl,
-        BufferKey {
-            size_bytes: size_of_t,
-            texture_format: None,
-        },
-    );
-
-    unsafe {
-        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, res.buffer_id);
-        gl.BufferSubData(
-            gl::SHADER_STORAGE_BUFFER,
-            0,
-            size_of_t as isize,
-            std::mem::transmute(contents),
-        );
-        gl.BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
-    }
-
-    Ok(res)*/
-    unimplemented!()
-}
-
-#[snoozy]
-pub async fn upload_buffer<T: Copy + Send + Sync + 'static>(
-    ctx: Context,
-    contents: &T,
-) -> Result<Buffer> {
-    //with_gl(|gl| upload_buffer_impl(gfx, ctx, contents))
-    unimplemented!()
+    let r: &T = &*contents;
+    let s: &[T] = std::slice::from_ref(r);
+    upload_array_buffer_impl(&&s, None)
 }
 
 use std::ops::Deref;
@@ -93,20 +64,22 @@ impl<T: 'static, OwnerT> std::hash::Hash for ArcView<T, OwnerT> {
     }
 }
 
-pub fn upload_array_buffer_impl<
-    T: Sized + 'static,
-    C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
->(
-    _ctx: Context,
-    contents: &C,
+// Allows smart pointers to containers implementing AsRef<[T]>
+pub fn upload_array_buffer_impl<T, CRef, TCont>(
+    contents: &CRef,
     texture_format: Option<vk::Format>,
-) -> Result<Buffer> {
+) -> Result<Buffer>
+where
+    T: Sized + Copy + 'static,
+    CRef: std::ops::Deref<Target = TCont>,
+    TCont: AsRef<[T]>,
+{
+    let contents: &[T] = AsRef::<[T]>::as_ref(&**contents);
     let size_of_t = size_of::<T>();
 
     let size_bytes = contents.len() * size_of_t;
     let res = backend::buffer::create_buffer(BufferKey::new(size_bytes, texture_format));
 
-    // TODO
     let (staging_buffer, staging_allocation, staging_allocation_info) = unsafe {
         let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::TRANSFER_SRC;
 
@@ -126,9 +99,6 @@ pub fn upload_array_buffer_impl<
             .create_buffer(&buffer_info, &mem_info)
             .expect("vma::create_buffer")
     };
-
-    //(contents.len() * size_of_t) as isize,
-    //contents.as_ptr() as *const T as *const std::ffi::c_void,
 
     unsafe {
         let mapped_ptr = vk_all()
@@ -169,26 +139,25 @@ pub fn upload_array_buffer_impl<
 
 #[snoozy]
 pub async fn upload_array_buffer<
-    T: Sized + 'static,
+    T: Sized + Copy + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    ctx: Context,
+    _ctx: Context,
     contents: &C,
 ) -> Result<Buffer> {
-    upload_array_buffer_impl(ctx, contents, None)
+    upload_array_buffer_impl(contents, None)
 }
 
 #[snoozy]
 pub async fn upload_array_tex_buffer<
-    T: Sized + 'static,
+    T: Sized + Copy + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
     ctx: Context,
     contents: &C,
     texture_format: &vk::Format,
 ) -> Result<Buffer> {
-    //with_gl(|gl| upload_array_buffer_impl(gfx, ctx, contents, Some(*texture_format)))
-    unimplemented!()
+    upload_array_buffer_impl(contents, Some(*texture_format))
 }
 
 pub fn to_byte_vec<T>(mut v: Vec<T>) -> Vec<u8>
