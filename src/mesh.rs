@@ -293,20 +293,20 @@ pub async fn make_raster_mesh(
 #[repr(C)]
 struct GpuMaterial {
     base_color_mult: [f32; 4],
-    maps: [u64; 3],
+    maps: [u32; 4],
 }
 
 impl Default for GpuMaterial {
     fn default() -> Self {
         Self {
             base_color_mult: [0.0f32; 4],
-            maps: [0; 3],
+            maps: [0; 4],
         }
     }
 }
 
-async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u64 {
-    /*let tex = match map {
+async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u32 {
+    let tex = match map {
         MeshMaterialMap::Asset {
             ref path,
             ref params,
@@ -315,11 +315,10 @@ async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u64 {
     };
 
     if let Ok(tex) = ctx.get(tex).await {
-        tex.bindless_handle
+        tex.bindless_index
     } else {
-        0u64
-    }*/
-    unimplemented!()
+        0u32
+    }
 }
 
 #[snoozy]

@@ -70,12 +70,7 @@ where
 }
 
 fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
-    use crate::vulkan::*;
-    use ash::util::Align;
-    use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
     use image::{DynamicImage, GenericImageView, ImageBuffer};
-
-    let device = vk_device();
 
     let image = image::load_from_memory(&blob.contents)?;
     let image_dimensions = image.dimensions();
@@ -90,7 +85,17 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
     };
 
     let image_data = image.into_raw();
-    let image_buffer_info = vk::BufferCreateInfo {
+    load_tex_impl(&image_data, image_dimensions, internal_format)
+}
+
+fn load_tex_impl(image_data: &[u8], image_dimensions: (u32, u32), internal_format: vk::Format) -> Result<Texture> {
+    use crate::vulkan::*;
+    use ash::util::Align;
+    use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+    use image::{DynamicImage, GenericImageView, ImageBuffer};
+
+    let device = vk_device();
+        let image_buffer_info = vk::BufferCreateInfo {
         size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
         usage: vk::BufferUsageFlags::TRANSFER_SRC,
         sharing_mode: vk::SharingMode::EXCLUSIVE,
@@ -119,7 +124,7 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
             buffer_allocation_info.get_size() as u64,
         );
 
-        image_slice.copy_from_slice(&image_data);
+        image_slice.copy_from_slice(image_data);
         vk_all().allocator.unmap_memory(&buffer_allocation);
     }
 
@@ -266,30 +271,8 @@ pub async fn load_tex_with_params(
 
 #[snoozy]
 pub async fn make_placeholder_rgba8_tex(_ctx: Context, texel_value: &[u8; 4]) -> Result<Texture> {
-    unimplemented!()
+    let image_dimensions = (1, 1);
+    let internal_format = vk::Format::R8G8B8A8_UNORM;
 
-    /*with_gl(|gl| unsafe {
-        let res = backend::texture::create_texture(
-            gl,
-            TextureKey {
-                width: 1,
-                height: 1,
-                format: gl::RGBA8,
-            },
-        );
-
-        gl.BindTexture(gl::TEXTURE_2D, res.texture_id);
-        gl.TexSubImage2D(
-            gl::TEXTURE_2D,
-            0,
-            0,
-            0,
-            1,
-            1,
-            gl::RGBA,
-            gl::UNSIGNED_BYTE,
-            std::mem::transmute(texel_value.as_ptr()),
-        );
-        Ok(res)
-    })*/
+    load_tex_impl(texel_value, image_dimensions, internal_format)
 }
