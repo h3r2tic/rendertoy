@@ -313,15 +313,17 @@ fn get_shader_text(source: &[shader_prepper::SourceChunk]) -> String {
 fn shaderc_compile_glsl(
     shader_name: &str,
     source: &[shader_prepper::SourceChunk],
+    shader_kind: shaderc::ShaderKind,
 ) -> Result<shaderc::CompilationArtifact> {
     use shaderc;
     let source = get_shader_text(source);
-    shaderc_compile_glsl_str(shader_name, &source)
+    shaderc_compile_glsl_str(shader_name, &source, shader_kind)
 }
 
 fn shaderc_compile_glsl_str(
     shader_name: &str,
     source: &str,
+    shader_kind: shaderc::ShaderKind,
 ) -> Result<shaderc::CompilationArtifact> {
     use shaderc;
 
@@ -334,7 +336,7 @@ fn shaderc_compile_glsl_str(
     let binary_result = compiler
         .compile_into_spirv(
             source,
-            shaderc::ShaderKind::Compute,
+            shader_kind,
             "shader.glsl",
             "main",
             Some(&options),
@@ -365,6 +367,7 @@ fn reflect_spirv_shader(shader_code: &[u32]) -> Result<spirv_reflect::ShaderModu
 
 fn generate_descriptor_set_layouts(
     refl: &spirv_reflect::ShaderModule,
+    stage_flags: vk::ShaderStageFlags,
 ) -> std::result::Result<Vec<vk::DescriptorSetLayout>, &'static str> {
     let mut result = Vec::new();
 
@@ -399,7 +402,7 @@ fn generate_descriptor_set_layouts(
                 let mut binding_builder = vk::DescriptorSetLayoutBinding::builder()
                     .descriptor_count(binding.count)
                     .descriptor_type(desc_type)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .stage_flags(stage_flags)
                     .binding(binding.binding);
 
                 // TODO
@@ -527,11 +530,8 @@ fn compact_descriptor_sets(refl: &mut spirv_reflect::ShaderModule) {
 }
 
 fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<ComputeShader> {
-    let t0 = std::time::Instant::now();
-
     let refl = {
-        let spirv = shaderc_compile_glsl(&name, source)?;
-        println!("shaderc_compile_glsl took {:?}", t0.elapsed());
+        let spirv = shaderc_compile_glsl(&name, source, shaderc::ShaderKind::Compute)?;
 
         let mut refl = reflect_spirv_shader(spirv.as_binary())?;
         compact_descriptor_sets(&mut refl);
@@ -542,7 +542,10 @@ fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<
 
     let local_size = get_cs_local_size_from_spirv(&spirv_binary)?;
 
-    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(&refl))?;
+    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(
+        &refl,
+        vk::ShaderStageFlags::COMPUTE,
+    ))?;
     let pipeline = create_compute_pipeline(vk_device(), &descriptor_set_layouts, &spirv_binary)?;
 
     let reflection = ShaderReflection {
@@ -598,9 +601,16 @@ pub async fn load_cs_from_string(
     load_cs_impl(name, &source)
 }
 
+// TODO: spirv_reflect::ShaderModule is probably not proper Clone
+#[derive(Clone)]
 pub struct RasterSubShader {
-    handle: u32,
+    module: spirv_reflect::ShaderModule,
+    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+    stage_flags: vk::ShaderStageFlags,
 }
+
+unsafe impl Send for RasterSubShader {}
+unsafe impl Sync for RasterSubShader {}
 
 impl Drop for RasterSubShader {
     fn drop(&mut self) {
@@ -622,12 +632,25 @@ pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    /*with_gl(|gl| {
-        Ok(RasterSubShader {
-            handle: backend::shader::make_shader(gfx, gl::VERTEX_SHADER, &source)?,
-        })
-    })*/
-    unimplemented!()
+    let name = "vs"; // TODO
+    let refl = {
+        let spirv = shaderc_compile_glsl(&name, &source, shaderc::ShaderKind::Vertex)?;
+
+        let mut refl = reflect_spirv_shader(spirv.as_binary())?;
+        compact_descriptor_sets(&mut refl);
+        refl
+    };
+
+    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(
+        &refl,
+        vk::ShaderStageFlags::VERTEX,
+    ))?;
+
+    Ok(RasterSubShader {
+        module: refl,
+        descriptor_set_layouts,
+        stage_flags: vk::ShaderStageFlags::VERTEX,
+    })
 }
 
 #[snoozy]
@@ -641,17 +664,31 @@ pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    /*with_gl(|gl| {
-        Ok(RasterSubShader {
-            handle: backend::shader::make_shader(gfx, gl::FRAGMENT_SHADER, &source)?,
-        })
-    })*/
-    unimplemented!()
+    let name = "vs"; // TODO
+    let refl = {
+        let spirv = shaderc_compile_glsl(&name, &source, shaderc::ShaderKind::Fragment)?;
+
+        let mut refl = reflect_spirv_shader(spirv.as_binary())?;
+        compact_descriptor_sets(&mut refl);
+        refl
+    };
+
+    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(
+        &refl,
+        vk::ShaderStageFlags::FRAGMENT,
+    ))?;
+
+    Ok(RasterSubShader {
+        module: refl,
+        descriptor_set_layouts,
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+    })
 }
 
 pub struct RasterPipeline {
-    handle: u32,
-    reflection: ShaderReflection,
+    pipeline: vk::Pipeline,
+    shaders: Vec<RasterSubShader>,
+    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
 }
 
 #[snoozy]
@@ -659,18 +696,225 @@ pub async fn make_raster_pipeline(
     ctx: Context,
     shaders_in: &Vec<SnoozyRef<RasterSubShader>>,
 ) -> Result<RasterPipeline> {
+    use std::ffi::{CStr, CString};
+    use std::mem;
+
     let mut shaders = Vec::with_capacity(shaders_in.len());
     for a in shaders_in.iter() {
-        shaders.push(ctx.get(&*a).await?.handle);
+        shaders.push(ctx.get(&*a).await?);
     }
 
-    /*with_gl(|gl| {
-        let handle = backend::shader::make_program(gfx, shaders.as_slice())?;
-        let reflection = reflect_shader(gfx, handle);
+    let renderpass_attachments = [
+        vk::AttachmentDescription {
+            format: vk::Format::R32G32B32A32_SFLOAT,
+            samples: vk::SampleCountFlags::TYPE_1,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::STORE,
+            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            ..Default::default()
+        },
+        vk::AttachmentDescription {
+            format: vk::Format::D16_UNORM,
+            samples: vk::SampleCountFlags::TYPE_1,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            ..Default::default()
+        },
+    ];
+    let color_attachment_refs = [vk::AttachmentReference {
+        attachment: 0,
+        layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    }];
+    let depth_attachment_ref = vk::AttachmentReference {
+        attachment: 1,
+        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    let dependencies = [vk::SubpassDependency {
+        src_subpass: vk::SUBPASS_EXTERNAL,
+        src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+        dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        ..Default::default()
+    }];
 
-        Ok(RasterPipeline { handle, reflection })
-    })*/
-    unimplemented!()
+    let subpasses = [vk::SubpassDescription::builder()
+        .color_attachments(&color_attachment_refs)
+        .depth_stencil_attachment(&depth_attachment_ref)
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .build()];
+
+    let renderpass_create_info = vk::RenderPassCreateInfo::builder()
+        .attachments(&renderpass_attachments)
+        .subpasses(&subpasses)
+        .dependencies(&dependencies);
+
+    let device = vk_device();
+
+    unsafe {
+        let renderpass = device
+            .create_render_pass(&renderpass_create_info, None)
+            .unwrap();
+
+        /*let framebuffers: Vec<vk::Framebuffer> = present_image_views
+        .iter()
+        .map(|&present_image_view| {
+            let framebuffer_attachments = [present_image_view, base.depth_image_view];
+            let frame_buffer_create_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(renderpass)
+                .attachments(&framebuffer_attachments)
+                .width(base.surface_resolution.width)
+                .height(base.surface_resolution.height)
+                .layers(1);
+
+            base.device
+                .create_framebuffer(&frame_buffer_create_info, None)
+                .unwrap()
+        })
+        .collect();*/
+
+        // TODO: more efficient concat
+        let mut descriptor_set_layouts = Vec::new();
+        for s in shaders.iter() {
+            descriptor_set_layouts.extend_from_slice(&s.descriptor_set_layouts);
+        }
+
+        let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&descriptor_set_layouts)
+            .build();
+        let pipeline_layout = device
+            .create_pipeline_layout(&layout_create_info, None)
+            .unwrap();
+
+        let shader_entry_name = CString::new("main").unwrap();
+        let shader_stage_create_infos: Vec<_> = shaders
+            .iter()
+            .map(|sub_shader| {
+                let code = sub_shader.module.get_code();
+                let shader_info = vk::ShaderModuleCreateInfo::builder().code(&code);
+                let shader_module = device
+                    .create_shader_module(&shader_info, None)
+                    .expect("Shader module error");
+
+                vk::PipelineShaderStageCreateInfo {
+                    module: shader_module,
+                    p_name: shader_entry_name.as_ptr(),
+                    stage: sub_shader.stage_flags,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo {
+            vertex_attribute_description_count: 0,
+            p_vertex_attribute_descriptions: std::ptr::null(),
+            vertex_binding_description_count: 0,
+            p_vertex_binding_descriptions: std::ptr::null(),
+            ..Default::default()
+        };
+        let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo {
+            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            ..Default::default()
+        };
+
+        let vk_all = unsafe { vk_all() };
+
+        let viewports = [vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: vk_all.window_width as f32,
+            height: vk_all.window_height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }];
+        let surface_resolution = vk::Extent2D {
+            width: vk_all.window_width,
+            height: vk_all.window_height,
+        };
+        let scissors = [vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: surface_resolution,
+        }];
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::builder()
+            .scissors(&scissors)
+            .viewports(&viewports);
+
+        let rasterization_info = vk::PipelineRasterizationStateCreateInfo {
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            line_width: 1.0,
+            polygon_mode: vk::PolygonMode::FILL,
+            ..Default::default()
+        };
+        let multisample_state_info = vk::PipelineMultisampleStateCreateInfo {
+            rasterization_samples: vk::SampleCountFlags::TYPE_1,
+            ..Default::default()
+        };
+        let noop_stencil_state = vk::StencilOpState {
+            fail_op: vk::StencilOp::KEEP,
+            pass_op: vk::StencilOp::KEEP,
+            depth_fail_op: vk::StencilOp::KEEP,
+            compare_op: vk::CompareOp::ALWAYS,
+            ..Default::default()
+        };
+        let depth_state_info = vk::PipelineDepthStencilStateCreateInfo {
+            depth_test_enable: 1,
+            depth_write_enable: 1,
+            depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+            front: noop_stencil_state,
+            back: noop_stencil_state,
+            max_depth_bounds: 1.0,
+            ..Default::default()
+        };
+        let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState {
+            blend_enable: 0,
+            src_color_blend_factor: vk::BlendFactor::SRC_COLOR,
+            dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_DST_COLOR,
+            color_blend_op: vk::BlendOp::ADD,
+            src_alpha_blend_factor: vk::BlendFactor::ZERO,
+            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+            alpha_blend_op: vk::BlendOp::ADD,
+            color_write_mask: vk::ColorComponentFlags::all(),
+        }];
+        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+            .logic_op(vk::LogicOp::CLEAR)
+            .attachments(&color_blend_attachment_states);
+
+        let dynamic_state = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_state);
+
+        let graphic_pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&shader_stage_create_infos)
+            .vertex_input_state(&vertex_input_state_info)
+            .input_assembly_state(&vertex_input_assembly_state_info)
+            .viewport_state(&viewport_state_info)
+            .rasterization_state(&rasterization_info)
+            .multisample_state(&multisample_state_info)
+            .depth_stencil_state(&depth_state_info)
+            .color_blend_state(&color_blend_state)
+            .dynamic_state(&dynamic_state_info)
+            .layout(pipeline_layout)
+            .render_pass(renderpass);
+
+        let graphics_pipelines = device
+            .create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[graphic_pipeline_info.build()],
+                None,
+            )
+            .expect("Unable to create graphics pipeline");
+
+        let graphic_pipeline = graphics_pipelines[0];
+        Ok(RasterPipeline {
+            pipeline: graphic_pipeline,
+            shaders: shaders
+                .iter()
+                .map(|s| -> RasterSubShader { (**s).clone() })
+                .collect(),
+            descriptor_set_layouts,
+        })
+    }
 }
 
 #[derive(Default)]

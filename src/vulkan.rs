@@ -353,8 +353,7 @@ impl VkKitchenSink {
                 .map(|raw_name| raw_name.as_ptr())
                 .collect();
 
-            let app_desc =
-                vk::ApplicationInfo::builder().api_version(ash::vk_make_version!(1, 0, 0));
+            let app_desc = vk::ApplicationInfo::builder().api_version(vk::make_version(1, 0, 0));
 
             let instance_desc = vk::InstanceCreateInfo::builder()
                 .application_info(&app_desc)
@@ -404,11 +403,13 @@ impl VkKitchenSink {
                         .filter_map(|(index, ref info)| {
                             let supports_graphic_and_surface =
                                 info.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-                                    && surface_loader.get_physical_device_surface_support(
-                                        *pdevice,
-                                        index as u32,
-                                        surface,
-                                    );
+                                    && surface_loader
+                                        .get_physical_device_surface_support(
+                                            *pdevice,
+                                            index as u32,
+                                            surface,
+                                        )
+                                        .unwrap();
                             match supports_graphic_and_surface {
                                 true => Some((*pdevice, index)),
                                 _ => None,
@@ -442,9 +443,12 @@ impl VkKitchenSink {
                 //RayTracing::name().as_ptr(),
                 vk::ExtDescriptorIndexingFn::name().as_ptr(),
                 vk::ExtScalarBlockLayoutFn::name().as_ptr(),
+                vk::KhrMaintenance2Fn::name().as_ptr(),
                 vk::KhrMaintenance3Fn::name().as_ptr(),
                 vk::KhrGetMemoryRequirements2Fn::name().as_ptr(),
                 vk::ExtDescriptorIndexingFn::name().as_ptr(),
+                vk::KhrImagelessFramebufferFn::name().as_ptr(),
+                vk::KhrImageFormatListFn::name().as_ptr(),
             ];
 
             let priorities = [1.0];

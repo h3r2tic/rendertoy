@@ -88,14 +88,18 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
     load_tex_impl(&image_data, image_dimensions, internal_format)
 }
 
-fn load_tex_impl(image_data: &[u8], image_dimensions: (u32, u32), internal_format: vk::Format) -> Result<Texture> {
+fn load_tex_impl(
+    image_data: &[u8],
+    image_dimensions: (u32, u32),
+    internal_format: vk::Format,
+) -> Result<Texture> {
     use crate::vulkan::*;
     use ash::util::Align;
     use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
     use image::{DynamicImage, GenericImageView, ImageBuffer};
 
     let device = vk_device();
-        let image_buffer_info = vk::BufferCreateInfo {
+    let image_buffer_info = vk::BufferCreateInfo {
         size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
         usage: vk::BufferUsageFlags::TRANSFER_SRC,
         sharing_mode: vk::SharingMode::EXCLUSIVE,
