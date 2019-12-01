@@ -403,9 +403,11 @@ fn generate_descriptor_set_layouts(
                     .binding(binding.binding);
 
                 // TODO
-                if desc_type == vk::DescriptorType::UNIFORM_TEXEL_BUFFER
-                    && sub_type == spirv_headers::Op::TypeRuntimeArray
-                {
+                // Bindless resources
+                if "all_buffers" == binding.name {
+                    assert_eq!(desc_type, vk::DescriptorType::UNIFORM_TEXEL_BUFFER);
+                    assert_eq!(sub_type, spirv_headers::Op::TypeRuntimeArray);
+
                     binding_flags.push(
                         vk::DescriptorBindingFlagsEXT::VARIABLE_DESCRIPTOR_COUNT
                             | vk::DescriptorBindingFlagsEXT::PARTIALLY_BOUND
@@ -927,12 +929,17 @@ fn flatten_uniforms(
     }
 }
 
+struct DescritorSetUpdateResult {
+    dynamic_offsets: Vec<u32>,
+    all_buffers_descriptor_set_idx: Option<usize>,
+}
+
 fn update_descriptor_sets(
     device: &Device,
     refl: &spirv_reflect::ShaderModule,
     descriptor_sets: &[vk::DescriptorSet],
     uniforms: &HashMap<String, ResolvedShaderUniformValue>,
-) -> std::result::Result<Vec<u32>, &'static str> {
+) -> std::result::Result<DescritorSetUpdateResult, &'static str> {
     use std::cell::RefCell;
 
     let mut ds_writes = Vec::new();
@@ -949,6 +956,8 @@ fn update_descriptor_sets(
     thread_local! {
         pub static CACHE: Cache = Default::default();
     }
+
+    let mut all_buffers_descriptor_set_idx = None;
 
     CACHE.with(|cache| {
         let mut ds_image_info = cache.ds_image_info.borrow_mut();
@@ -1121,7 +1130,8 @@ fn update_descriptor_sets(
                             );
                         } else {
                             if "all_buffers" == binding.name {
-                                // Nothing to do; updated elsewhere
+                                // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
+                                all_buffers_descriptor_set_idx = Some(binding.set as usize);
                             } else {
                                 // TODO
                                 panic!("Could not find resource to bind {}", binding.name);
@@ -1137,7 +1147,10 @@ fn update_descriptor_sets(
             unsafe { device.update_descriptor_sets(&ds_writes, &[]) };
         }
 
-        Ok(ds_offsets)
+        Ok(DescritorSetUpdateResult {
+            dynamic_offsets: ds_offsets,
+            all_buffers_descriptor_set_idx,
+        })
     })
 }
 
@@ -1168,7 +1181,7 @@ pub async fn compute_tex(
         }
     });
 
-    let (descriptor_sets, dynamic_offsets) = unsafe {
+    let (descriptor_sets, ds_update_result) = unsafe {
         let descriptor_sets = {
             let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
             let sets = device.allocate_descriptor_sets(
@@ -1181,7 +1194,7 @@ pub async fn compute_tex(
             sets
         };
 
-        let dynamic_offsets = update_descriptor_sets(
+        let ds_update_result = update_descriptor_sets(
             device,
             &cs.spirv_reflection,
             &descriptor_sets,
@@ -1189,7 +1202,7 @@ pub async fn compute_tex(
         )
         .unwrap();
 
-        (descriptor_sets, dynamic_offsets)
+        (descriptor_sets, ds_update_result)
     };
 
     let cb = vk_frame.command_buffer.lock().unwrap();
@@ -1208,9 +1221,8 @@ pub async fn compute_tex(
 
         let mut descriptor_sets = descriptor_sets;
 
-        // TODO; "all_buffers" hack.
-        if descriptor_sets.len() == 2 {
-            descriptor_sets[1] = vk_all().bindless_buffers_descriptor_set;
+        if let Some(idx) = ds_update_result.all_buffers_descriptor_set_idx {
+            descriptor_sets[idx] = vk_all().bindless_buffers_descriptor_set;
         }
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
@@ -1220,7 +1232,7 @@ pub async fn compute_tex(
             cs.pipeline.pipeline_layout,
             0,
             &descriptor_sets,
-            &dynamic_offsets,
+            &ds_update_result.dynamic_offsets,
         );
 
         device.cmd_dispatch(
