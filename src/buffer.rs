@@ -116,10 +116,15 @@ where
     let copy_dst_buffer = res.buffer;
     vk_add_setup_command(move |vk_all, vk_frame| {
         vk_frame
-            .buffers_to_destroy
+            .frame_cleanup
             .lock()
             .unwrap()
-            .push((staging_buffer, staging_allocation));
+            .push(Box::new(move |vk_all| {
+                vk_all
+                    .allocator
+                    .destroy_buffer(staging_buffer, &staging_allocation)
+                    .unwrap()
+            }));
 
         let cb = vk_frame.command_buffer.lock().unwrap();
         let cb: vk::CommandBuffer = cb.cb;

@@ -1623,7 +1623,7 @@ pub async fn raster_tex(
         let mut pass_attachment_desc =
             vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(&texture_attachments);
 
-        const USE_IMAGELESS: bool = true;
+        const USE_IMAGELESS: bool = false;
 
         let framebuffer = if USE_IMAGELESS {
             raster_pipe.framebuffer
@@ -1635,7 +1635,17 @@ pub async fn raster_tex(
                 .height(height as _)
                 .layers(1)
                 .attachments(&texture_attachments);
-            device.create_framebuffer(&fbo_desc, None)?
+            let fbo = device.create_framebuffer(&fbo_desc, None)?;
+
+            vk_frame
+                .frame_cleanup
+                .lock()
+                .unwrap()
+                .push(Box::new(move |vk_all| {
+                    vk_all.device.destroy_framebuffer(fbo, None);
+                }));
+
+            fbo
         };
 
         let mut pass_begin_desc = vk::RenderPassBeginInfo::builder()

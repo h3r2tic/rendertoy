@@ -145,7 +145,7 @@ pub struct VkFrameData {
     pub present_image_view: vk::ImageView,
     pub rendering_complete_semaphore: vk::Semaphore,
     pub submit_done_fence: vk::Fence,
-    pub buffers_to_destroy: Mutex<Vec<(vk::Buffer, vk_mem::Allocation)>>,
+    pub frame_cleanup: Mutex<Vec<Box<dyn Fn(&VkKitchenSink) + Send + Sync>>>,
 }
 
 pub const SAMPLER_LINEAR: usize = 0;
@@ -595,7 +595,7 @@ impl VkKitchenSink {
                         present_image_view: present_image_views[i],
                         rendering_complete_semaphore: rendering_complete_semaphores[i],
                         submit_done_fence,
-                        buffers_to_destroy: Mutex::new(Default::default()),
+                        frame_cleanup: Mutex::new(Default::default()),
                     }
                 })
                 .collect();
@@ -969,8 +969,11 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
             )
             .expect("Reset command buffer failed.");
 
-        for (buffer, allocation) in vk_frame().buffers_to_destroy.lock().unwrap().drain(..) {
-            vk_all().allocator.destroy_buffer(buffer, &allocation);
+        {
+            let vk_all = vk_all();
+            for f in vk_frame().frame_cleanup.lock().unwrap().drain(..) {
+                (f)(vk_all);
+            }
         }
 
         device.reset_descriptor_pool(

@@ -141,10 +141,15 @@ fn load_tex_impl(
     let res_image = res.image;
     vk_add_setup_command(move |vk_all, vk_frame| {
         vk_frame
-            .buffers_to_destroy
+            .frame_cleanup
             .lock()
             .unwrap()
-            .push((image_buffer, buffer_allocation));
+            .push(Box::new(move |vk_all| {
+                vk_all
+                    .allocator
+                    .destroy_buffer(image_buffer, &buffer_allocation)
+                    .unwrap()
+            }));
 
         let cb = vk_frame.command_buffer.lock().unwrap();
         let cb: vk::CommandBuffer = cb.cb;
