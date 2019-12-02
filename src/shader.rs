@@ -718,23 +718,23 @@ pub async fn make_raster_pipeline(
             final_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             ..Default::default()
         },
-        /*vk::AttachmentDescription {
-            format: vk::Format::D16_UNORM,
+        vk::AttachmentDescription {
+            format: vk::Format::D24_UNORM_S8_UINT,
             samples: vk::SampleCountFlags::TYPE_1,
             load_op: vk::AttachmentLoadOp::CLEAR,
-            initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            initial_layout: vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
+            final_layout: vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
             ..Default::default()
-        },*/
+        },
     ];
     let color_attachment_refs = [vk::AttachmentReference {
         attachment: 0,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }];
-    /*let depth_attachment_ref = vk::AttachmentReference {
+    let depth_attachment_ref = vk::AttachmentReference {
         attachment: 1,
         layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };*/
+    };
     let dependencies = [vk::SubpassDependency {
         src_subpass: vk::SUBPASS_EXTERNAL,
         src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -746,7 +746,7 @@ pub async fn make_raster_pipeline(
 
     let subpasses = [vk::SubpassDescription::builder()
         .color_attachments(&color_attachment_refs)
-        //.depth_stencil_attachment(&depth_attachment_ref)
+        .depth_stencil_attachment(&depth_attachment_ref)
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .build()];
 
@@ -822,7 +822,7 @@ pub async fn make_raster_pipeline(
             rasterization_samples: vk::SampleCountFlags::TYPE_1,
             ..Default::default()
         };
-        /*let noop_stencil_state = vk::StencilOpState {
+        let noop_stencil_state = vk::StencilOpState {
             fail_op: vk::StencilOp::KEEP,
             pass_op: vk::StencilOp::KEEP,
             depth_fail_op: vk::StencilOp::KEEP,
@@ -832,12 +832,12 @@ pub async fn make_raster_pipeline(
         let depth_state_info = vk::PipelineDepthStencilStateCreateInfo {
             depth_test_enable: 1,
             depth_write_enable: 1,
-            depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+            depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
             front: noop_stencil_state,
             back: noop_stencil_state,
             max_depth_bounds: 1.0,
             ..Default::default()
-        };*/
+        };
         let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState {
             blend_enable: 0,
             src_color_blend_factor: vk::BlendFactor::SRC_COLOR,
@@ -863,7 +863,7 @@ pub async fn make_raster_pipeline(
             .viewport_state(&viewport_state_info)
             .rasterization_state(&rasterization_info)
             .multisample_state(&multisample_state_info)
-            //.depth_stencil_state(&depth_state_info)
+            .depth_stencil_state(&depth_state_info)
             .color_blend_state(&color_blend_state)
             .dynamic_state(&dynamic_state_info)
             .layout(pipeline_layout)
@@ -892,7 +892,14 @@ pub async fn make_raster_pipeline(
                         | vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 )
                 .build();
-            let attachments = [color_attachment];
+            let depth_attachment = vk::FramebufferAttachmentImageInfoKHR::builder()
+                .width(width as _)
+                .height(height as _)
+                .layer_count(1)
+                .view_formats(&[vk::Format::D24_UNORM_S8_UINT])
+                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                .build();
+            let attachments = [color_attachment, depth_attachment];
             let mut imageless_desc = vk::FramebufferAttachmentsCreateInfoKHR::builder()
                 .attachment_image_infos(&attachments);
             let mut fbo_desc = vk::FramebufferCreateInfo::builder()
@@ -902,7 +909,7 @@ pub async fn make_raster_pipeline(
                 .height(height as _)
                 .layers(1)
                 .push_next(&mut imageless_desc);
-            fbo_desc.attachment_count = 1;
+            fbo_desc.attachment_count = 2;
             device.create_framebuffer(&fbo_desc, None)?
         };
 
@@ -1598,13 +1605,21 @@ pub async fn raster_tex(
             .with_discard(true),
         );
 
-        let clear_values = [vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 0.0],
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 0.0],
+                },
             },
-        }];
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 0.0,
+                    stencil: 0,
+                },
+            },
+        ];
 
-        let texture_attachments = [output_tex.rt_view];
+        let texture_attachments = [output_tex.rt_view, vk_all.depth_image_view];
         let mut pass_attachment_desc =
             vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(&texture_attachments);
 
@@ -1614,21 +1629,6 @@ pub async fn raster_tex(
             raster_pipe.framebuffer
         } else {
             // HACK; must not do this, but validation layers are broken with IMAGELESS_KHR
-            let surface_format = vk::Format::R32G32B32A32_SFLOAT;
-            let color_formats = [surface_format];
-            let color_attachment = vk::FramebufferAttachmentImageInfoKHR::builder()
-                .width(width as _)
-                .height(height as _)
-                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
-                .layer_count(1)
-                .view_formats(&color_formats)
-                .usage(
-                    vk::ImageUsageFlags::SAMPLED
-                        | vk::ImageUsageFlags::TRANSFER_DST
-                        | vk::ImageUsageFlags::STORAGE
-                        | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                )
-                .build();
             let mut fbo_desc = vk::FramebufferCreateInfo::builder()
                 .render_pass(raster_pipe.render_pass)
                 .width(width as _)

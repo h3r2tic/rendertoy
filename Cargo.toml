@@ -36,8 +36,4 @@ shaderc = "0.6.1"
 spirv-reflect = "0.2.3"
 rspirv = "0.5.4"
 spirv_headers = "1.4.1"
-
 rpmalloc = "0.1.0"
-
-#[target.'cfg(windows)'.dependencies]
-#winapi = { version = "0.3.8", features = ["winuser", "dxgi", "d3d12"] }

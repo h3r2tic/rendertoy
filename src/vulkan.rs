@@ -161,7 +161,6 @@ pub struct VkKitchenSink {
     pub debug_call_back: Option<vk::DebugReportCallbackEXT>,
 
     pub pdevice: vk::PhysicalDevice,
-    pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub present_queue_family_index: u32,
     pub present_queue: vk::Queue,
 
@@ -184,6 +183,9 @@ pub struct VkKitchenSink {
 
     pub window_width: u32,
     pub window_height: u32,
+
+    pub depth_image: vk::Image,
+    pub depth_image_view: vk::ImageView,
 }
 
 pub struct ImageBarrier {
@@ -276,63 +278,6 @@ fn allocate_frame_command_buffer(
     VkCommandBufferData { cb, pool }
 }
 
-/*#[cfg(target_os = "windows")]
-fn set_stable_power_state(find_luid: &[u8]) {
-    use winapi::shared::dxgi;
-    use winapi::um::{d3d12, d3dcommon};
-    let mut dxgi_factory: *mut dxgi::IDXGIFactory1 = std::ptr::null_mut();
-    let hr = unsafe {
-        dxgi::CreateDXGIFactory1(
-            &dxgi::IID_IDXGIFactory1,
-            &mut dxgi_factory as *mut _ as *mut *mut _,
-        )
-    };
-    if hr < 0 {
-        panic!("Failed to create DXGI factory");
-    }
-    let mut idx = 0;
-    loop {
-        let mut adapter1: *mut dxgi::IDXGIAdapter1 = std::ptr::null_mut();
-        let hr = unsafe {
-            dxgi_factory
-                .as_ref()
-                .unwrap()
-                .EnumAdapters1(idx, &mut adapter1 as *mut _ as *mut *mut _)
-        };
-        if hr != 0 {
-            break;
-        }
-        let mut desc: dxgi::DXGI_ADAPTER_DESC1 = unsafe { std::mem::zeroed() };
-        let hr = unsafe { adapter1.as_ref().unwrap().GetDesc1(&mut desc) };
-        if hr < 0 {
-            panic!("Failed to get adapter descriptor");
-        }
-        let luid =
-            unsafe { std::slice::from_raw_parts(&desc.AdapterLuid as *const _ as *const u8, 8) };
-        if luid == find_luid {
-            let mut device: *mut d3d12::ID3D12Device = std::ptr::null_mut();
-            let hr = unsafe {
-                d3d12::D3D12CreateDevice(
-                    adapter1 as *mut _,
-                    d3dcommon::D3D_FEATURE_LEVEL_11_0,
-                    &d3d12::IID_ID3D12Device,
-                    &mut device as *mut _ as *mut *mut _,
-                )
-            };
-            if hr < 0 {
-                panic!("Failed to create matching device");
-            }
-            let hr = unsafe { device.as_ref().unwrap().SetStablePowerState(1) };
-            if hr < 0 {
-                panic!("Failed to call SetStablePowerState, did you enable developer mode?");
-            } else {
-                println!("Enabled stable power state");
-            }
-        }
-        idx += 1;
-    }
-}*/
-
 impl VkKitchenSink {
     pub fn new(window: &winit::Window, graphics_debugging: bool) -> Result<Self, Box<dyn Error>> {
         unsafe {
@@ -421,20 +366,6 @@ impl VkKitchenSink {
                 .filter_map(|v| v)
                 .nth(0)
                 .expect("Couldn't find suitable device.");
-
-            /*{
-                let mut physical_device_id = vk::PhysicalDeviceIDProperties::builder().build();
-                let mut physical_device_properties2 = vk::PhysicalDeviceProperties2::default();
-                physical_device_properties2.p_next = &mut physical_device_id as *mut _ as *mut _;
-                unsafe {
-                    instance
-                        .get_physical_device_properties2(pdevice, &mut physical_device_properties2)
-                };
-                let physical_properties = physical_device_properties2.properties;
-                if physical_device_id.device_luid_valid == 1 {
-                    set_stable_power_state(&physical_device_id.device_luid);
-                }
-            }*/
 
             let present_queue_family_index = present_queue_family_index as u32;
             let device_properties = instance.get_physical_device_properties(pdevice);
@@ -594,7 +525,6 @@ impl VkKitchenSink {
                     device.create_image_view(&create_view_info, None).unwrap()
                 })
                 .collect();
-            let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
 
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
@@ -679,6 +609,65 @@ impl VkKitchenSink {
                 vk::DescriptorType::SAMPLED_IMAGE,
             );
 
+            let depth_image_create_info = vk::ImageCreateInfo::builder()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::D24_UNORM_S8_UINT)
+                .extent(vk::Extent3D {
+                    width: surface_resolution.width,
+                    height: surface_resolution.height,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+            let (depth_image, _allocation, _allocation_info) = allocator
+                .create_image(
+                    &depth_image_create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        usage: vk_mem::MemoryUsage::GpuOnly,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+
+            let depth_image_view_info = vk::ImageViewCreateInfo::builder()
+                .subresource_range(
+                    vk::ImageSubresourceRange::builder()
+                        .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                        .level_count(1)
+                        .layer_count(1)
+                        .build(),
+                )
+                .image(depth_image)
+                .format(depth_image_create_info.format)
+                .view_type(vk::ImageViewType::TYPE_2D);
+
+            let depth_image_view = device
+                .create_image_view(&depth_image_view_info, None)
+                .unwrap();
+
+            vk_add_setup_command(move |vk_all, vk_frame| {
+                let cb = vk_frame.command_buffer.lock().unwrap();
+                let cb: vk::CommandBuffer = cb.cb;
+
+                unsafe {
+                    vk_all.record_image_aspect_barrier(
+                        cb,
+                        vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
+                        ImageBarrier::new(
+                            depth_image,
+                            vk_sync::AccessType::Nothing,
+                            vk_sync::AccessType::DepthAttachmentWriteStencilReadOnly,
+                        )
+                        .with_discard(true),
+                    )
+                };
+            });
+
             Ok(Self {
                 entry,
                 instance,
@@ -686,7 +675,6 @@ impl VkKitchenSink {
                 device_properties,
                 present_queue_family_index,
                 pdevice,
-                device_memory_properties,
                 surface_loader,
                 surface_format,
                 present_queue,
@@ -706,6 +694,8 @@ impl VkKitchenSink {
                 debug_report_loader,
                 window_width: physical_dimensions.width as u32,
                 window_height: physical_dimensions.height as u32,
+                depth_image,
+                depth_image_view,
             })
         }
     }
@@ -899,6 +889,39 @@ impl VkKitchenSink {
             }],
         );
     }
+
+    pub fn record_image_aspect_barrier(
+        &self,
+        cb: vk::CommandBuffer,
+        aspect_mask: vk::ImageAspectFlags,
+        barrier: ImageBarrier,
+    ) {
+        let range = vk::ImageSubresourceRange {
+            aspect_mask,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+
+        vk_sync::cmd::pipeline_barrier(
+            self.device.fp_v1_0(),
+            cb,
+            None,
+            &[],
+            &[vk_sync::ImageBarrier {
+                previous_accesses: &[barrier.prev_access],
+                next_accesses: &[barrier.next_access],
+                previous_layout: vk_sync::ImageLayout::Optimal,
+                next_layout: vk_sync::ImageLayout::Optimal,
+                discard_contents: barrier.discard,
+                src_queue_family_index: 0,
+                dst_queue_family_index: 0,
+                image: barrier.image,
+                range,
+            }],
+        );
+    }
 }
 
 impl Drop for VkKitchenSink {
@@ -961,14 +984,6 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
         device
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
             .expect("Begin commandbuffer");
-
-        /*let viewport = vk::Viewport::builder()
-            .width(vk_all().window_width as f32)
-            .height(-(vk_all().window_height as f32))
-            .y(vk_all().window_height as f32)
-            .min_depth(-1.0)
-            .max_depth(1.0);
-        device.cmd_set_viewport(command_buffer, 0, &[viewport.build()]);*/
 
         unsafe {
             vk_frame_mut().uniforms.map();
