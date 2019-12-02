@@ -443,6 +443,7 @@ impl VkKitchenSink {
                 //RayTracing::name().as_ptr(),
                 vk::ExtDescriptorIndexingFn::name().as_ptr(),
                 vk::ExtScalarBlockLayoutFn::name().as_ptr(),
+                vk::KhrMaintenance1Fn::name().as_ptr(),
                 vk::KhrMaintenance2Fn::name().as_ptr(),
                 vk::KhrMaintenance3Fn::name().as_ptr(),
                 vk::KhrGetMemoryRequirements2Fn::name().as_ptr(),
@@ -458,6 +459,10 @@ impl VkKitchenSink {
                 .queue_priorities(&priorities)
                 .build()];
 
+            let mut scalar_block = vk::PhysicalDeviceScalarBlockLayoutFeaturesEXT::builder()
+                .scalar_block_layout(true)
+                .build();
+
             let mut descriptor_indexing =
                 vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder()
                     .descriptor_binding_variable_descriptor_count(true)
@@ -469,9 +474,10 @@ impl VkKitchenSink {
                     .shader_sampled_image_array_non_uniform_indexing(true)
                     .build();
 
-            let mut scalar_block = vk::PhysicalDeviceScalarBlockLayoutFeaturesEXT::builder()
-                .scalar_block_layout(true)
-                .build();
+            let mut imageless_framebuffer =
+                vk::PhysicalDeviceImagelessFramebufferFeaturesKHR::builder()
+                    .imageless_framebuffer(true)
+                    .build();
 
             let mut features2 = vk::PhysicalDeviceFeatures2::default();
             instance
@@ -484,6 +490,7 @@ impl VkKitchenSink {
                 .enabled_features(&features2.features)
                 .push_next(&mut scalar_block)
                 .push_next(&mut descriptor_indexing)
+                .push_next(&mut imageless_framebuffer)
                 .build();
 
             let device: Device = instance

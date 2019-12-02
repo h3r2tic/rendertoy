@@ -59,6 +59,7 @@ impl TextureKey {
 pub struct Texture {
     pub image: vk::Image,
     pub view: vk::ImageView,
+    pub rt_view: vk::ImageView,
     pub storage_view: vk::ImageView,
     pub key: TextureKey,
     pub bindless_index: u32,
@@ -69,19 +70,30 @@ pub struct Texture {
 pub struct ImageResource {
     image: vk::Image,
     view: vk::ImageView,
+    rt_view: vk::ImageView,
     storage_view: vk::ImageView,
     memory: vk::DeviceMemory,
     bindless_index: u32,
+
+    // Validation layers retain pointers to those, so we must keep them valid :/
+    format_list: Option<Box<vk::ImageFormatListCreateInfoKHR>>,
+    view_formats: Option<Vec<vk::Format>>,
 }
+
+unsafe impl Send for ImageResource {}
+unsafe impl Sync for ImageResource {}
 
 impl ImageResource {
     fn new() -> Self {
         ImageResource {
             image: vk::Image::null(),
             view: vk::ImageView::null(),
+            rt_view: vk::ImageView::null(),
             storage_view: vk::ImageView::null(),
             memory: vk::DeviceMemory::null(),
             bindless_index: std::u32::MAX,
+            format_list: None,
+            view_formats: None,
         }
     }
 
@@ -101,6 +113,17 @@ impl ImageResource {
                 ..Default::default()
             };
 
+            let mut view_formats = vec![format];
+            if storage_format != format {
+                view_formats.push(storage_format);
+            }
+
+            let mut format_list = Box::new(
+                vk::ImageFormatListCreateInfoKHR::builder()
+                    .view_formats(&view_formats)
+                    .build(),
+            );
+
             let mut create_info = vk::ImageCreateInfo::builder()
                 .image_type(image_type)
                 .format(storage_format)
@@ -113,6 +136,7 @@ impl ImageResource {
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .initial_layout(vk::ImageLayout::UNDEFINED)
                 .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
+                .push_next(&mut *format_list)
                 .build();
 
             let (image, _allocation, _allocation_info) = vk_all()
@@ -120,6 +144,8 @@ impl ImageResource {
                 .create_image(&create_info, &mem_info)
                 .unwrap();
 
+            self.view_formats = Some(view_formats);
+            self.format_list = Some(format_list);
             self.image = image;
         }
     }
@@ -130,6 +156,7 @@ impl ImageResource {
         format: vk::Format,
         storage_format: vk::Format,
         readonly_usage: vk::ImageUsageFlags,
+        rt_usage: vk::ImageUsageFlags,
         range: vk::ImageSubresourceRange,
     ) {
         let image = self.image;
@@ -151,6 +178,12 @@ impl ImageResource {
             let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(readonly_usage);
             let create_info = create_info().push_next(&mut view_usage).build();
             self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+        }
+
+        {
+            let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(rt_usage);
+            let create_info = create_info().push_next(&mut view_usage).build();
+            self.rt_view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
         }
 
         {
@@ -186,6 +219,7 @@ impl TransientResource for Texture {
         Self {
             image: allocation.payload.image,
             view: allocation.payload.view,
+            rt_view: allocation.payload.rt_view,
             storage_view: allocation.payload.storage_view,
             key: desc,
             bindless_index: allocation.payload.bindless_index,
@@ -219,6 +253,7 @@ impl TransientResource for Texture {
             format,
             storage_format,
             vk::ImageUsageFlags::SAMPLED,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT,
             vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,

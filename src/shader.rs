@@ -688,6 +688,8 @@ pub struct RasterPipeline {
     shaders: Vec<std::pin::Pin<std::sync::Arc<RasterSubShader>>>,
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
     pipeline_layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    framebuffer: vk::Framebuffer,
 }
 
 #[snoozy]
@@ -703,32 +705,36 @@ pub async fn make_raster_pipeline(
         shaders.push(ctx.get(&*a).await?);
     }
 
+    let surface_format = vk::Format::R32G32B32A32_SFLOAT;
+    let width = unsafe { vk_all() }.window_width;
+    let height = unsafe { vk_all() }.window_height;
+
     let renderpass_attachments = [
         vk::AttachmentDescription {
-            format: vk::Format::R32G32B32A32_SFLOAT,
+            format: surface_format,
             samples: vk::SampleCountFlags::TYPE_1,
             load_op: vk::AttachmentLoadOp::CLEAR,
             store_op: vk::AttachmentStoreOp::STORE,
-            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            final_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             ..Default::default()
         },
-        vk::AttachmentDescription {
+        /*vk::AttachmentDescription {
             format: vk::Format::D16_UNORM,
             samples: vk::SampleCountFlags::TYPE_1,
             load_op: vk::AttachmentLoadOp::CLEAR,
             initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             ..Default::default()
-        },
+        },*/
     ];
     let color_attachment_refs = [vk::AttachmentReference {
         attachment: 0,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }];
-    let depth_attachment_ref = vk::AttachmentReference {
+    /*let depth_attachment_ref = vk::AttachmentReference {
         attachment: 1,
         layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
+    };*/
     let dependencies = [vk::SubpassDependency {
         src_subpass: vk::SUBPASS_EXTERNAL,
         src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -740,11 +746,11 @@ pub async fn make_raster_pipeline(
 
     let subpasses = [vk::SubpassDescription::builder()
         .color_attachments(&color_attachment_refs)
-        .depth_stencil_attachment(&depth_attachment_ref)
+        //.depth_stencil_attachment(&depth_attachment_ref)
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .build()];
 
-    let renderpass_create_info = vk::RenderPassCreateInfo::builder()
+    let render_pass_create_info = vk::RenderPassCreateInfo::builder()
         .attachments(&renderpass_attachments)
         .subpasses(&subpasses)
         .dependencies(&dependencies);
@@ -752,26 +758,9 @@ pub async fn make_raster_pipeline(
     let device = vk_device();
 
     unsafe {
-        let renderpass = device
-            .create_render_pass(&renderpass_create_info, None)
+        let render_pass = device
+            .create_render_pass(&render_pass_create_info, None)
             .unwrap();
-
-        /*let framebuffers: Vec<vk::Framebuffer> = present_image_views
-        .iter()
-        .map(|&present_image_view| {
-            let framebuffer_attachments = [present_image_view, base.depth_image_view];
-            let frame_buffer_create_info = vk::FramebufferCreateInfo::builder()
-                .render_pass(renderpass)
-                .attachments(&framebuffer_attachments)
-                .width(base.surface_resolution.width)
-                .height(base.surface_resolution.height)
-                .layers(1);
-
-            base.device
-                .create_framebuffer(&frame_buffer_create_info, None)
-                .unwrap()
-        })
-        .collect();*/
 
         // TODO: more efficient concat
         let mut descriptor_set_layouts = Vec::new();
@@ -819,25 +808,9 @@ pub async fn make_raster_pipeline(
 
         let vk_all = unsafe { vk_all() };
 
-        let viewports = [vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: vk_all.window_width as f32,
-            height: vk_all.window_height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        }];
-        let surface_resolution = vk::Extent2D {
-            width: vk_all.window_width,
-            height: vk_all.window_height,
-        };
-        let scissors = [vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: surface_resolution,
-        }];
         let viewport_state_info = vk::PipelineViewportStateCreateInfo::builder()
-            .scissors(&scissors)
-            .viewports(&viewports);
+            .viewport_count(1)
+            .scissor_count(1);
 
         let rasterization_info = vk::PipelineRasterizationStateCreateInfo {
             front_face: vk::FrontFace::COUNTER_CLOCKWISE,
@@ -849,7 +822,7 @@ pub async fn make_raster_pipeline(
             rasterization_samples: vk::SampleCountFlags::TYPE_1,
             ..Default::default()
         };
-        let noop_stencil_state = vk::StencilOpState {
+        /*let noop_stencil_state = vk::StencilOpState {
             fail_op: vk::StencilOp::KEEP,
             pass_op: vk::StencilOp::KEEP,
             depth_fail_op: vk::StencilOp::KEEP,
@@ -864,7 +837,7 @@ pub async fn make_raster_pipeline(
             back: noop_stencil_state,
             max_depth_bounds: 1.0,
             ..Default::default()
-        };
+        };*/
         let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState {
             blend_enable: 0,
             src_color_blend_factor: vk::BlendFactor::SRC_COLOR,
@@ -890,11 +863,11 @@ pub async fn make_raster_pipeline(
             .viewport_state(&viewport_state_info)
             .rasterization_state(&rasterization_info)
             .multisample_state(&multisample_state_info)
-            .depth_stencil_state(&depth_state_info)
+            //.depth_stencil_state(&depth_state_info)
             .color_blend_state(&color_blend_state)
             .dynamic_state(&dynamic_state_info)
             .layout(pipeline_layout)
-            .render_pass(renderpass);
+            .render_pass(render_pass);
 
         let graphics_pipelines = device
             .create_graphics_pipelines(
@@ -904,12 +877,43 @@ pub async fn make_raster_pipeline(
             )
             .expect("Unable to create graphics pipeline");
 
+        let framebuffer = {
+            let color_formats = [surface_format];
+            let color_attachment = vk::FramebufferAttachmentImageInfoKHR::builder()
+                .width(width as _)
+                .height(height as _)
+                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
+                .layer_count(1)
+                .view_formats(&color_formats)
+                .usage(
+                    vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::TRANSFER_DST
+                        | vk::ImageUsageFlags::STORAGE
+                        | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                )
+                .build();
+            let attachments = [color_attachment];
+            let mut imageless_desc = vk::FramebufferAttachmentsCreateInfoKHR::builder()
+                .attachment_image_infos(&attachments);
+            let mut fbo_desc = vk::FramebufferCreateInfo::builder()
+                .flags(vk::FramebufferCreateFlags::IMAGELESS_KHR)
+                .render_pass(render_pass)
+                .width(width as _)
+                .height(height as _)
+                .layers(1)
+                .push_next(&mut imageless_desc);
+            fbo_desc.attachment_count = 1;
+            device.create_framebuffer(&fbo_desc, None)?
+        };
+
         let graphic_pipeline = graphics_pipelines[0];
         Ok(RasterPipeline {
             pipeline: graphic_pipeline,
             shaders: shaders,
             descriptor_set_layouts,
             pipeline_layout,
+            render_pass,
+            framebuffer,
         })
     }
 }
@@ -1575,44 +1579,16 @@ pub async fn raster_tex(
     });
 
     let device = vk_device();
+    let vk_all = unsafe { vk_all() };
     let vk_frame = unsafe { vk_frame() };
-
-    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
-    flatten_uniforms(uniforms, &mut |e| {
-        if let PlumberEvent::SetUniform { name, value } = e {
-            flattened_uniforms.insert(name, value);
-        }
-    });
-
-    let (descriptor_sets, ds_update_result) = unsafe {
-        let descriptor_sets = {
-            let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
-            let sets = device.allocate_descriptor_sets(
-                &vk::DescriptorSetAllocateInfo::builder()
-                    .descriptor_pool(*descriptor_pool)
-                    .set_layouts(&raster_pipe.descriptor_set_layouts)
-                    .build(),
-            )?;
-            drop(descriptor_pool);
-            sets
-        };
-
-        let ds_update_result = update_descriptor_sets(
-            device,
-            raster_pipe.shaders.iter().map(|s| &s.module),
-            &descriptor_sets,
-            &flattened_uniforms,
-        )
-        .unwrap();
-
-        (descriptor_sets, ds_update_result)
-    };
+    let width = vk_all.window_width;
+    let height = vk_all.window_height;
 
     let cb = vk_frame.command_buffer.lock().unwrap();
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        vk_all().record_image_barrier(
+        vk_all.record_image_barrier(
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1622,31 +1598,181 @@ pub async fn raster_tex(
             .with_discard(true),
         );
 
-        let mut descriptor_sets = descriptor_sets;
+        let clear_values = [vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 0.0],
+            },
+        }];
 
-        if let Some(idx) = ds_update_result.all_buffers_descriptor_set_idx {
-            descriptor_sets[idx] = vk_all().bindless_buffers_descriptor_set;
+        let texture_attachments = [output_tex.rt_view];
+        let mut pass_attachment_desc =
+            vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(&texture_attachments);
+
+        const USE_IMAGELESS: bool = false;
+
+        let framebuffer = if USE_IMAGELESS {
+            raster_pipe.framebuffer
+        } else {
+            // HACK; must not do this, but validation layers are broken with IMAGELESS_KHR
+            let surface_format = vk::Format::R32G32B32A32_SFLOAT;
+            let color_formats = [surface_format];
+            let color_attachment = vk::FramebufferAttachmentImageInfoKHR::builder()
+                .width(width as _)
+                .height(height as _)
+                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
+                .layer_count(1)
+                .view_formats(&color_formats)
+                .usage(
+                    vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::TRANSFER_DST
+                        | vk::ImageUsageFlags::STORAGE
+                        | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                )
+                .build();
+            let mut fbo_desc = vk::FramebufferCreateInfo::builder()
+                .render_pass(raster_pipe.render_pass)
+                .width(width as _)
+                .height(height as _)
+                .layers(1)
+                .attachments(&texture_attachments);
+            device.create_framebuffer(&fbo_desc, None)?
+        };
+
+        let mut pass_begin_desc = vk::RenderPassBeginInfo::builder()
+            .render_pass(raster_pipe.render_pass)
+            .framebuffer(framebuffer)
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: width as _,
+                    height: height as _,
+                },
+            })
+            .clear_values(&clear_values);
+
+        if USE_IMAGELESS {
+            pass_begin_desc = pass_begin_desc.push_next(&mut pass_attachment_desc)
         }
 
-        device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
-        device.cmd_bind_descriptor_sets(
-            cb,
-            vk::PipelineBindPoint::GRAPHICS,
-            raster_pipe.pipeline_layout,
-            0,
-            &descriptor_sets,
-            &ds_update_result.dynamic_offsets,
-        );
+        device.cmd_begin_render_pass(cb, &pass_begin_desc, vk::SubpassContents::INLINE);
+    }
 
-        // TODO: draw
-        /*device.cmd_dispatch(
-            cb,
-            (key.width + cs.local_size.0 - 1) / cs.local_size.0,
-            (key.height + cs.local_size.1 - 1) / cs.local_size.1,
-            1,
-        );*/
+    let flush_draw =
+        |flattened_uniforms: &HashMap<String, ResolvedShaderUniformValue>| -> Result<()> {
+            unsafe {
+                let (descriptor_sets, ds_update_result) = {
+                    let descriptor_sets = {
+                        let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
+                        let sets = device.allocate_descriptor_sets(
+                            &vk::DescriptorSetAllocateInfo::builder()
+                                .descriptor_pool(*descriptor_pool)
+                                .set_layouts(&raster_pipe.descriptor_set_layouts)
+                                .build(),
+                        )?;
+                        drop(descriptor_pool);
+                        sets
+                    };
 
-        vk_all().record_image_barrier(
+                    let ds_update_result = update_descriptor_sets(
+                        device,
+                        raster_pipe.shaders.iter().map(|s| &s.module),
+                        &descriptor_sets,
+                        &flattened_uniforms,
+                    )
+                    .unwrap();
+
+                    (descriptor_sets, ds_update_result)
+                };
+
+                let mut descriptor_sets = descriptor_sets;
+
+                if let Some(idx) = ds_update_result.all_buffers_descriptor_set_idx {
+                    descriptor_sets[idx] = vk_all.bindless_buffers_descriptor_set;
+                }
+
+                device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
+
+                device.cmd_set_viewport(
+                    cb,
+                    0,
+                    &[vk::Viewport {
+                        x: 0.0,
+                        y: (height as f32),
+                        width: width as _,
+                        height: -(height as f32),
+                        min_depth: 0.0,
+                        max_depth: 1.0,
+                    }],
+                );
+                device.cmd_set_scissor(
+                    cb,
+                    0,
+                    &[vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: vk::Extent2D {
+                            width: width as _,
+                            height: height as _,
+                        },
+                    }],
+                );
+
+                device.cmd_bind_descriptor_sets(
+                    cb,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    raster_pipe.pipeline_layout,
+                    0,
+                    &descriptor_sets,
+                    &ds_update_result.dynamic_offsets,
+                );
+
+                Ok(())
+            }
+        };
+
+    #[derive(Default)]
+    struct MeshDrawData {
+        index_buffer: Option<vk::Buffer>,
+        index_count: Option<u32>,
+    }
+
+    let mut mesh_stack = vec![MeshDrawData::default()];
+
+    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
+    flatten_uniforms(uniforms, &mut |e| match e {
+        PlumberEvent::SetUniform { name, value } => {
+            match value {
+                ResolvedShaderUniformValue::BufferAsset(ref buf) if name == "mesh_index_buf" => {
+                    mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer);
+                }
+                ResolvedShaderUniformValue::Uint32(value) if name == "mesh_index_count" => {
+                    mesh_stack.last_mut().unwrap().index_count = Some(value);
+                }
+                _ => {}
+            }
+
+            flattened_uniforms.insert(name, value);
+        }
+        PlumberEvent::EnterScope => {
+            mesh_stack.push(Default::default());
+        }
+        PlumberEvent::LeaveScope => {
+            let mesh = mesh_stack.pop().unwrap();
+            if let Some(index_count) = mesh.index_count {
+                if let Some(index_buffer) = mesh.index_buffer {
+                    unsafe {
+                        flush_draw(&flattened_uniforms).expect("flush_draw");
+                        device.cmd_bind_index_buffer(cb, index_buffer, 0, vk::IndexType::UINT32);
+                        device.cmd_draw_indexed(cb, index_count as _, 1, 0, 0, 0);
+                    }
+                }
+            }
+        }
+    });
+
+    unsafe {
+        device.cmd_end_render_pass(cb);
+
+        vk_all.record_image_barrier(
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1654,7 +1780,7 @@ pub async fn raster_tex(
                 vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
             ),
         );
-    }
+    };
 
     Ok(output_tex)
 
