@@ -1608,7 +1608,7 @@ pub async fn raster_tex(
         let mut pass_attachment_desc =
             vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(&texture_attachments);
 
-        const USE_IMAGELESS: bool = false;
+        const USE_IMAGELESS: bool = true;
 
         let framebuffer = if USE_IMAGELESS {
             raster_pipe.framebuffer
