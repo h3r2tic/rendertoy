@@ -25,11 +25,14 @@ unsafe extern "system" fn vulkan_debug_callback(
     vk::FALSE
 }
 
-fn extension_names() -> Vec<*const i8> {
-    vec![
-        DebugReport::name().as_ptr(),
-        vk::KhrGetPhysicalDeviceProperties2Fn::name().as_ptr(),
-    ]
+fn extension_names(graphics_debugging: bool) -> Vec<*const i8> {
+    let mut names = vec![vk::KhrGetPhysicalDeviceProperties2Fn::name().as_ptr()];
+
+    if graphics_debugging {
+        names.push(DebugReport::name().as_ptr());
+    }
+
+    names
 }
 
 pub struct VkCommandBufferData {
@@ -286,7 +289,7 @@ impl VkKitchenSink {
             let instance_extensions = surface_extensions
                 .iter()
                 .map(|ext| ext.as_ptr())
-                .chain(extension_names().into_iter())
+                .chain(extension_names(graphics_debugging).into_iter())
                 .collect::<Vec<_>>();
 
             let mut layer_names = Vec::new();
@@ -809,7 +812,11 @@ impl VkKitchenSink {
                             .bindings(&[vk::DescriptorSetLayoutBinding::builder()
                                 .descriptor_count(desc_count)
                                 .descriptor_type(descriptor_type)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .stage_flags(
+                                    vk::ShaderStageFlags::COMPUTE
+                                        | vk::ShaderStageFlags::VERTEX
+                                        | vk::ShaderStageFlags::FRAGMENT,
+                                )
                                 .binding(0)
                                 .build()])
                             .push_next(&mut binding_flags)
@@ -948,8 +955,8 @@ impl Drop for VkKitchenSink {
     }
 }
 
-pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffer)>(
-    device: &D,
+pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
+    device: &Device,
     command_buffer: vk::CommandBuffer,
     submit_queue: vk::Queue,
     wait_mask: &[vk::PipelineStageFlags],
@@ -976,10 +983,13 @@ pub fn record_submit_commandbuffer<D: DeviceV1_0, F: FnOnce(&D, vk::CommandBuffe
             }
         }
 
-        device.reset_descriptor_pool(
-            *vk_frame().descriptor_pool.lock().unwrap(),
-            Default::default(),
-        );
+        {
+            let mut pool = vk_frame().descriptor_pool.lock().unwrap();
+            device.reset_descriptor_pool(*pool, Default::default());
+            //device.destroy_descriptor_pool(*pool, None);
+            //*pool = allocate_frame_descriptor_pool(device);
+            drop(pool);
+        }
 
         let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);

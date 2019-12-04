@@ -143,8 +143,6 @@ where
         // TODO: barrier
     });
 
-    // TODO: free the staging buffer
-
     Ok(res)
 }
 

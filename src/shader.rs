@@ -373,29 +373,17 @@ fn generate_descriptor_set_layouts(
 
     let entry = Some("main");
     for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
+        //println!("{:#?}", descriptor_set);
         let mut binding_flags: Vec<vk::DescriptorBindingFlagsEXT> = Vec::new();
         let mut bindings: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
+        let mut immutable_samplers: Vec<vk::Sampler> =
+            Vec::with_capacity(descriptor_set.bindings.len());
 
-        for binding in descriptor_set.bindings.iter() {
-            use spirv_reflect::types::descriptor::ReflectDescriptorType;
-
-            let desc_type = match binding.descriptor_type {
-                ReflectDescriptorType::UniformBuffer => {
-                    Some(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-                }
-                ReflectDescriptorType::StorageImage => Some(vk::DescriptorType::STORAGE_IMAGE),
-                ReflectDescriptorType::SampledImage => Some(vk::DescriptorType::SAMPLED_IMAGE),
-                ReflectDescriptorType::StorageBuffer => Some(vk::DescriptorType::STORAGE_BUFFER),
-                ReflectDescriptorType::UniformTexelBuffer => {
-                    Some(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
-                }
-                _ => {
-                    print!("\tunsupported");
-                    None
-                }
-            };
-
-            if let Some(desc_type) = desc_type {
+        let mut create_binding =
+            |desc_type,
+             binding: &spirv_reflect::types::descriptor::ReflectDescriptorBinding,
+             bindings: &mut Vec<vk::DescriptorSetLayoutBinding>,
+             binding_flags: &mut Vec<vk::DescriptorBindingFlagsEXT>| {
                 let sub_type = *binding.type_description.as_ref().unwrap().op;
                 //println!("{:#?}", binding);
 
@@ -416,12 +404,85 @@ fn generate_descriptor_set_layouts(
                             | vk::DescriptorBindingFlagsEXT::PARTIALLY_BOUND
                             | vk::DescriptorBindingFlagsEXT::UPDATE_UNUSED_WHILE_PENDING,
                     );
-                    binding_builder = binding_builder.descriptor_count(1 << 18);
+                    binding_builder = binding_builder.descriptor_count(1 << 18).stage_flags(
+                        vk::ShaderStageFlags::COMPUTE
+                            | vk::ShaderStageFlags::VERTEX
+                            | vk::ShaderStageFlags::FRAGMENT,
+                    );
+                } else if "all_textures" == binding.name {
+                    assert_eq!(desc_type, vk::DescriptorType::SAMPLED_IMAGE);
+                    assert_eq!(sub_type, spirv_headers::Op::TypeRuntimeArray);
+
+                    binding_flags.push(
+                        vk::DescriptorBindingFlagsEXT::VARIABLE_DESCRIPTOR_COUNT
+                            | vk::DescriptorBindingFlagsEXT::PARTIALLY_BOUND
+                            | vk::DescriptorBindingFlagsEXT::UPDATE_UNUSED_WHILE_PENDING,
+                    );
+                    binding_builder = binding_builder.descriptor_count(1 << 18).stage_flags(
+                        vk::ShaderStageFlags::COMPUTE
+                            | vk::ShaderStageFlags::VERTEX
+                            | vk::ShaderStageFlags::FRAGMENT,
+                    );
                 } else {
                     binding_flags.push(vk::DescriptorBindingFlagsEXT::empty());
                 }
 
                 bindings.push(binding_builder.build());
+            };
+
+        for binding in descriptor_set.bindings.iter() {
+            use spirv_reflect::types::descriptor::ReflectDescriptorType;
+
+            match binding.descriptor_type {
+                ReflectDescriptorType::UniformBuffer => create_binding(
+                    vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+                    binding,
+                    &mut bindings,
+                    &mut binding_flags,
+                ),
+                ReflectDescriptorType::StorageImage => create_binding(
+                    vk::DescriptorType::STORAGE_IMAGE,
+                    binding,
+                    &mut bindings,
+                    &mut binding_flags,
+                ),
+                ReflectDescriptorType::SampledImage => create_binding(
+                    vk::DescriptorType::SAMPLED_IMAGE,
+                    binding,
+                    &mut bindings,
+                    &mut binding_flags,
+                ),
+                ReflectDescriptorType::StorageBuffer => create_binding(
+                    vk::DescriptorType::STORAGE_BUFFER,
+                    binding,
+                    &mut bindings,
+                    &mut binding_flags,
+                ),
+                ReflectDescriptorType::UniformTexelBuffer => create_binding(
+                    vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+                    binding,
+                    &mut bindings,
+                    &mut binding_flags,
+                ),
+                ReflectDescriptorType::Sampler => {
+                    immutable_samplers
+                        .push(unsafe { vk_all() }.samplers[crate::vulkan::SAMPLER_LINEAR]);
+                    binding_flags.push(vk::DescriptorBindingFlagsEXT::empty());
+                    bindings.push(
+                        vk::DescriptorSetLayoutBinding::builder()
+                            .descriptor_count(binding.count)
+                            .descriptor_type(vk::DescriptorType::SAMPLER)
+                            .stage_flags(stage_flags)
+                            .binding(binding.binding)
+                            .immutable_samplers(std::slice::from_ref(
+                                &immutable_samplers.last().unwrap(),
+                            ))
+                            .build(),
+                    );
+                }
+                _ => {
+                    dbg!(&binding);
+                }
             }
         }
 
@@ -517,16 +578,18 @@ fn get_cs_local_size_from_spirv(spirv: &[u32]) -> Result<(u32, u32, u32)> {
 }
 
 // Pack descriptor sets so that they use small consecutive integers, e.g. sets [0, 5, 31] become [0, 1, 2]
-fn compact_descriptor_sets(refl: &mut spirv_reflect::ShaderModule) {
+fn compact_descriptor_sets(refl: &mut spirv_reflect::ShaderModule, set_idx_offset: u32) -> u32 {
     let entry = Some("main");
     let sets = refl
         .enumerate_descriptor_sets(entry)
         .expect("enumerate_descriptor_sets");
     let mut set_order: Vec<_> = sets.iter().enumerate().map(|(i, s)| (i, s.set)).collect();
     set_order.sort_by_key(|(i, set_idx)| *set_idx);
+    let set_count = set_order.len();
     for (new_idx, (old_idx, _)) in set_order.into_iter().enumerate() {
-        refl.change_descriptor_set_number(&sets[old_idx], new_idx as u32);
+        refl.change_descriptor_set_number(&sets[old_idx], new_idx as u32 + set_idx_offset);
     }
+    set_count as u32
 }
 
 fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<ComputeShader> {
@@ -534,7 +597,7 @@ fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<
         let spirv = shaderc_compile_glsl(&name, source, shaderc::ShaderKind::Compute)?;
 
         let mut refl = reflect_spirv_shader(spirv.as_binary())?;
-        compact_descriptor_sets(&mut refl);
+        compact_descriptor_sets(&mut refl, 0);
         refl
     };
 
@@ -602,8 +665,8 @@ pub async fn load_cs_from_string(
 }
 
 pub struct RasterSubShader {
-    module: spirv_reflect::ShaderModule, // Note: spirv_reflect::ShaderModule should not be Clone! It uses a Drop which will corrupt heap if cloned
-    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+    //module: spirv_reflect::ShaderModule, // Note: spirv_reflect::ShaderModule should not be Clone! It uses a Drop which will corrupt heap if cloned
+    spirv: shaderc::CompilationArtifact,
     stage_flags: vk::ShaderStageFlags,
 }
 
@@ -631,22 +694,10 @@ pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
     )?;
 
     let name = "vs"; // TODO
-    let refl = {
-        let spirv = shaderc_compile_glsl(&name, &source, shaderc::ShaderKind::Vertex)?;
-
-        let mut refl = reflect_spirv_shader(spirv.as_binary())?;
-        compact_descriptor_sets(&mut refl);
-        refl
-    };
-
-    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(
-        &refl,
-        vk::ShaderStageFlags::VERTEX,
-    ))?;
+    let spirv = shaderc_compile_glsl(&name, &source, shaderc::ShaderKind::Vertex)?;
 
     Ok(RasterSubShader {
-        module: refl,
-        descriptor_set_layouts,
+        spirv,
         stage_flags: vk::ShaderStageFlags::VERTEX,
     })
 }
@@ -662,35 +713,27 @@ pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
         },
     )?;
 
-    let name = "vs"; // TODO
-    let refl = {
-        let spirv = shaderc_compile_glsl(&name, &source, shaderc::ShaderKind::Fragment)?;
-
-        let mut refl = reflect_spirv_shader(spirv.as_binary())?;
-        compact_descriptor_sets(&mut refl);
-        refl
-    };
-
-    let descriptor_set_layouts = convert_spirv_reflect_err(generate_descriptor_set_layouts(
-        &refl,
-        vk::ShaderStageFlags::FRAGMENT,
-    ))?;
+    let name = "ps"; // TODO
+    let spirv = shaderc_compile_glsl(&name, &source, shaderc::ShaderKind::Fragment)?;
 
     Ok(RasterSubShader {
-        module: refl,
-        descriptor_set_layouts,
+        spirv,
         stage_flags: vk::ShaderStageFlags::FRAGMENT,
     })
 }
 
 pub struct RasterPipeline {
     pipeline: vk::Pipeline,
-    shaders: Vec<std::pin::Pin<std::sync::Arc<RasterSubShader>>>,
+    //shaders: Vec<RasterSubShader>,
+    shader_refl: Vec<spirv_reflect::ShaderModule>,
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
     pipeline_layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
     framebuffer: vk::Framebuffer,
 }
+
+unsafe impl Send for RasterPipeline {}
+unsafe impl Sync for RasterPipeline {}
 
 #[snoozy]
 pub async fn make_raster_pipeline(
@@ -764,8 +807,23 @@ pub async fn make_raster_pipeline(
 
         // TODO: more efficient concat
         let mut descriptor_set_layouts = Vec::new();
-        for s in shaders.iter() {
-            descriptor_set_layouts.extend_from_slice(&s.descriptor_set_layouts);
+        let mut shader_modules_code = Vec::new();
+        let mut shader_refl = Vec::with_capacity(shaders.len());
+
+        {
+            let mut dset_offset = 0u32;
+            for s in shaders.iter() {
+                let mut refl = reflect_spirv_shader(s.spirv.as_binary())?;
+                dset_offset += compact_descriptor_sets(&mut refl, dset_offset);
+
+                let mut shader_descriptor_set_layouts = convert_spirv_reflect_err(
+                    generate_descriptor_set_layouts(&refl, s.stage_flags),
+                )?;
+
+                shader_modules_code.push(refl.get_code());
+                shader_refl.push(refl);
+                descriptor_set_layouts.append(&mut shader_descriptor_set_layouts);
+            }
         }
 
         let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
@@ -778,9 +836,10 @@ pub async fn make_raster_pipeline(
         let shader_entry_name = CString::new("main").unwrap();
         let shader_stage_create_infos: Vec<_> = shaders
             .iter()
-            .map(|sub_shader| {
-                let code = sub_shader.module.get_code();
-                let shader_info = vk::ShaderModuleCreateInfo::builder().code(&code);
+            .enumerate()
+            .map(|(sub_shader_idx, sub_shader)| {
+                let code = &shader_modules_code[sub_shader_idx];
+                let shader_info = vk::ShaderModuleCreateInfo::builder().code(code);
                 let shader_module = device
                     .create_shader_module(&shader_info, None)
                     .expect("Shader module error");
@@ -916,7 +975,8 @@ pub async fn make_raster_pipeline(
         let graphic_pipeline = graphics_pipelines[0];
         Ok(RasterPipeline {
             pipeline: graphic_pipeline,
-            shaders: shaders,
+            //shaders: shaders,
+            shader_refl,
             descriptor_set_layouts,
             pipeline_layout,
             render_pass,
@@ -1183,7 +1243,8 @@ fn flatten_uniforms(
 
 struct DescritorSetUpdateResult {
     dynamic_offsets: Vec<u32>,
-    all_buffers_descriptor_set_idx: Option<usize>,
+    all_buffers_descriptor_set_idx: Vec<usize>,
+    all_textures_descriptor_set_idx: Vec<usize>,
 }
 
 fn update_descriptor_sets<'a>(
@@ -1194,7 +1255,6 @@ fn update_descriptor_sets<'a>(
 ) -> std::result::Result<DescritorSetUpdateResult, &'static str> {
     use std::cell::RefCell;
 
-    let mut ds_writes = Vec::new();
     let mut ds_offsets = Vec::new();
 
     #[derive(Default)]
@@ -1202,6 +1262,7 @@ fn update_descriptor_sets<'a>(
         ds_image_info: RefCell<Vec<[vk::DescriptorImageInfo; 1]>>,
         ds_buffer_info: RefCell<Vec<[vk::DescriptorBufferInfo; 1]>>,
         ds_buffer_views: RefCell<Vec<[vk::BufferView; 1]>>,
+        ds_writes: RefCell<Vec<vk::WriteDescriptorSet>>,
     }
 
     // TODO: cache those in thread-locals
@@ -1209,29 +1270,32 @@ fn update_descriptor_sets<'a>(
         pub static CACHE: Cache = Default::default();
     }
 
-    // TODO: could be multiple between different stages
-    let mut all_buffers_descriptor_set_idx = None;
+    let mut all_buffers_descriptor_set_idx = Vec::new();
+    let mut all_textures_descriptor_set_idx = Vec::new();
 
-    for refl in refl {
-        CACHE.with(|cache| -> std::result::Result<(), &'static str> {
-            let mut ds_image_info = cache.ds_image_info.borrow_mut();
-            let mut ds_buffer_info = cache.ds_buffer_info.borrow_mut();
-            let mut ds_buffer_views = cache.ds_buffer_views.borrow_mut();
+    CACHE.with(|cache| -> std::result::Result<(), &'static str> {
+        let mut ds_image_info = cache.ds_image_info.borrow_mut();
+        let mut ds_buffer_info = cache.ds_buffer_info.borrow_mut();
+        let mut ds_buffer_views = cache.ds_buffer_views.borrow_mut();
+        let mut ds_writes = cache.ds_writes.borrow_mut();
 
-            ds_image_info.clear();
-            ds_image_info.reserve(uniforms.len());
+        ds_image_info.clear();
+        ds_image_info.reserve(uniforms.len());
 
-            ds_buffer_info.clear();
-            ds_buffer_info.reserve(uniforms.len());
+        ds_buffer_info.clear();
+        ds_buffer_info.reserve(uniforms.len());
 
-            ds_buffer_views.clear();
-            ds_buffer_views.reserve(uniforms.len());
+        ds_buffer_views.clear();
+        ds_buffer_views.reserve(uniforms.len());
 
+        ds_writes.clear();
+        ds_writes.reserve(uniforms.len());
+
+        for refl in refl {
             let entry = Some("main");
             for (ds_idx, descriptor_set) in
                 refl.enumerate_descriptor_sets(entry)?.iter().enumerate()
             {
-                let ds = descriptor_sets[0];
                 for binding in descriptor_set.bindings.iter() {
                     use spirv_reflect::types::descriptor::ReflectDescriptorType;
 
@@ -1296,7 +1360,7 @@ fn update_descriptor_sets<'a>(
                             ds_offsets.push(buffer_offset as u32);
                             ds_writes.push(
                                 vk::WriteDescriptorSet::builder()
-                                    .dst_set(ds)
+                                    .dst_set(descriptor_sets[binding.set as usize])
                                     .dst_binding(binding.binding)
                                     .dst_array_element(0)
                                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
@@ -1317,13 +1381,21 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(ds)
+                                        .dst_set(descriptor_sets[binding.set as usize])
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                                         .image_info(image_info)
                                         .build(),
                                 )
+                            } else {
+                                if "all_textures" == binding.name {
+                                    // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
+                                    all_textures_descriptor_set_idx.push(binding.set as usize);
+                                } else {
+                                    // TODO
+                                    panic!("Could not find resource to bind {}", binding.name);
+                                }
                             }
                         }
                         ReflectDescriptorType::StorageImage => {
@@ -1339,13 +1411,16 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(ds)
+                                        .dst_set(descriptor_sets[binding.set as usize])
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                                         .image_info(image_info)
                                         .build(),
                                 )
+                            } else {
+                                // TODO
+                                panic!("Could not find resource to bind {}", binding.name);
                             }
                         }
                         ReflectDescriptorType::StorageBuffer => {
@@ -1359,16 +1434,35 @@ fn update_descriptor_sets<'a>(
                                 ds_buffer_info.push(buffer_info);
                                 let buffer_info = ds_buffer_info.last().unwrap();
 
+                                /*println!(
+                                    "Updating storage buffer at {}:{}",
+                                    binding.set, binding.binding
+                                );*/
+
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(ds)
+                                        .dst_set(descriptor_sets[binding.set as usize])
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                                         .buffer_info(buffer_info)
                                         .build(),
                                 );
+                            } else {
+                                panic!(binding
+                                    .type_description
+                                    .as_ref()
+                                    .unwrap()
+                                    .type_name
+                                    .clone());
                             }
+                        }
+                        ReflectDescriptorType::Sampler => {
+                            // Immutable. Nothing to do.
+                            /*println!(
+                                "Skipping sampler update at {}:{}",
+                                binding.set, binding.binding
+                            );*/
                         }
                         ReflectDescriptorType::UniformTexelBuffer => {
                             if let Some(ResolvedShaderUniformValue::BufferAsset(value)) =
@@ -1379,7 +1473,7 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(ds)
+                                        .dst_set(descriptor_sets[binding.set as usize])
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
@@ -1389,29 +1483,34 @@ fn update_descriptor_sets<'a>(
                             } else {
                                 if "all_buffers" == binding.name {
                                     // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
-                                    all_buffers_descriptor_set_idx = Some(binding.set as usize);
+                                    all_buffers_descriptor_set_idx.push(binding.set as usize);
                                 } else {
                                     // TODO
                                     panic!("Could not find resource to bind {}", binding.name);
                                 }
                             }
                         }
-                        _ => print!("\tunsupported"),
+                        _ => {
+                            dbg!(&binding);
+                        }
                     }
                 }
             }
+        }
 
-            if !ds_writes.is_empty() {
-                unsafe { device.update_descriptor_sets(&ds_writes, &[]) };
-            }
-
-            Ok(())
-        })?
-    }
+        //dbg!(&ds_writes);
+        //dbg!(&descriptor_sets);
+        if !ds_writes.is_empty() {
+            unsafe { device.update_descriptor_sets(&ds_writes, &[]) };
+        }
+    
+        Ok(())
+    })?;
 
     Ok(DescritorSetUpdateResult {
         dynamic_offsets: ds_offsets,
         all_buffers_descriptor_set_idx,
+        all_textures_descriptor_set_idx,
     })
 }
 
@@ -1481,8 +1580,12 @@ pub async fn compute_tex(
 
         let mut descriptor_sets = descriptor_sets;
 
-        if let Some(idx) = ds_update_result.all_buffers_descriptor_set_idx {
-            descriptor_sets[idx] = vk_all().bindless_buffers_descriptor_set;
+        for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
+            descriptor_sets[*idx] = vk_all().bindless_buffers_descriptor_set;
+        }
+
+        for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
+            descriptor_sets[*idx] = vk_all().bindless_images_descriptor_set;
         }
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
@@ -1585,6 +1688,8 @@ pub async fn raster_tex(
         value: ResolvedShaderUniformValue::TextureAsset(output_tex.clone()),
     });
 
+    //println!("---- raster_tex: ----");
+
     let device = vk_device();
     let vk_all = unsafe { vk_all() };
     let vk_frame = unsafe { vk_frame() };
@@ -1685,7 +1790,7 @@ pub async fn raster_tex(
 
                     let ds_update_result = update_descriptor_sets(
                         device,
-                        raster_pipe.shaders.iter().map(|s| &s.module),
+                        raster_pipe.shader_refl.iter(),
                         &descriptor_sets,
                         &flattened_uniforms,
                     )
@@ -1696,8 +1801,12 @@ pub async fn raster_tex(
 
                 let mut descriptor_sets = descriptor_sets;
 
-                if let Some(idx) = ds_update_result.all_buffers_descriptor_set_idx {
-                    descriptor_sets[idx] = vk_all.bindless_buffers_descriptor_set;
+                for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
+                    descriptor_sets[*idx] = vk_all.bindless_buffers_descriptor_set;
+                }
+
+                for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
+                    descriptor_sets[*idx] = vk_all.bindless_images_descriptor_set;
                 }
 
                 device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
@@ -1773,6 +1882,7 @@ pub async fn raster_tex(
                         flush_draw(&flattened_uniforms).expect("flush_draw");
                         device.cmd_bind_index_buffer(cb, index_buffer, 0, vk::IndexType::UINT32);
                         device.cmd_draw_indexed(cb, index_count as _, 1, 0, 0, 0);
+                        //println!("-------");
                     }
                 }
             }
