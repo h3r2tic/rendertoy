@@ -221,7 +221,7 @@ pub struct ComputeShader {
     pub name: String,
     pipeline: ComputePipeline,
     spirv_reflection: spirv_reflect::ShaderModule,
-    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+    descriptor_set_layout_info: DescriptorSetLayoutInfo,
     local_size: (u32, u32, u32),
 }
 
@@ -649,7 +649,7 @@ fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<
         name,
         pipeline,
         spirv_reflection: refl,
-        descriptor_set_layouts: descriptor_set_layout_info.all_layouts,
+        descriptor_set_layout_info,
         local_size,
     })
 }
@@ -1105,10 +1105,29 @@ struct DescritorSetUpdateResult {
     all_textures_descriptor_set_idx: Vec<usize>,
 }
 
+trait DescriptorSetSlice {
+    fn get_at_idx(&self, idx: usize) -> std::result::Result<vk::DescriptorSet, &'static str>;
+}
+
+/*impl DescriptorSetSlice for Vec<vk::DescriptorSet> {
+    fn get_at_idx(&self, idx: usize) -> std::result::Result<vk::DescriptorSet, &'static str> {
+        Ok(self[idx])
+    }
+}*/
+
+impl DescriptorSetSlice for Vec<Option<vk::DescriptorSet>> {
+    fn get_at_idx(&self, idx: usize) -> std::result::Result<vk::DescriptorSet, &'static str> {
+        match self[idx] {
+            Some(d) => Ok(d),
+            None => Err("Not a dynamic descriptor set"),
+        }
+    }
+}
+
 fn update_descriptor_sets<'a>(
     device: &Device,
     refl: impl Iterator<Item = &'a spirv_reflect::ShaderModule>,
-    descriptor_sets: &[vk::DescriptorSet],
+    descriptor_sets: &impl DescriptorSetSlice,
     uniforms: &HashMap<String, ResolvedShaderUniformValue>,
 ) -> std::result::Result<DescritorSetUpdateResult, &'static str> {
     use std::cell::RefCell;
@@ -1216,7 +1235,7 @@ fn update_descriptor_sets<'a>(
                             ds_offsets.push(buffer_offset as u32);
                             ds_writes.push(
                                 vk::WriteDescriptorSet::builder()
-                                    .dst_set(descriptor_sets[binding.set as usize])
+                                    .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
                                     .dst_binding(binding.binding)
                                     .dst_array_element(0)
                                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
@@ -1237,7 +1256,7 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(descriptor_sets[binding.set as usize])
+                                        .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
@@ -1267,7 +1286,7 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(descriptor_sets[binding.set as usize])
+                                        .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -1297,7 +1316,7 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(descriptor_sets[binding.set as usize])
+                                        .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -1329,7 +1348,7 @@ fn update_descriptor_sets<'a>(
 
                                 ds_writes.push(
                                     vk::WriteDescriptorSet::builder()
-                                        .dst_set(descriptor_sets[binding.set as usize])
+                                        .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
                                         .dst_binding(binding.binding)
                                         .dst_array_element(0)
                                         .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
@@ -1400,14 +1419,21 @@ pub async fn compute_tex(
 
     let (descriptor_sets, ds_update_result) = unsafe {
         let descriptor_sets = {
+            let layout_info = &cs.descriptor_set_layout_info;
             let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
-            let sets = device.allocate_descriptor_sets(
+            let dynamic_sets = device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::builder()
                     .descriptor_pool(*descriptor_pool)
-                    .set_layouts(&cs.descriptor_set_layouts)
+                    .set_layouts(&layout_info.dynamic_layouts)
                     .build(),
             )?;
             drop(descriptor_pool);
+
+            let mut sets = vec![None; layout_info.all_layouts.len()];
+            for (src, dst) in layout_info.dynamic_layout_indices.iter().enumerate() {
+                sets[*dst] = Some(dynamic_sets[src]);
+            }
+
             sets
         };
 
@@ -1439,12 +1465,14 @@ pub async fn compute_tex(
         let mut descriptor_sets = descriptor_sets;
 
         for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-            descriptor_sets[*idx] = vk_all().bindless_buffers_descriptor_set;
+            descriptor_sets[*idx] = Some(vk_all().bindless_buffers_descriptor_set);
         }
 
         for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-            descriptor_sets[*idx] = vk_all().bindless_images_descriptor_set;
+            descriptor_sets[*idx] = Some(vk_all().bindless_images_descriptor_set);
         }
+
+        let descriptor_sets: Vec<_> = descriptor_sets.into_iter().map(Option::unwrap).collect();
 
         device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
         device.cmd_bind_descriptor_sets(
@@ -1588,14 +1616,21 @@ pub async fn raster_tex(
             unsafe {
                 let (descriptor_sets, ds_update_result) = {
                     let descriptor_sets = {
+                        let layout_info = &raster_pipe.descriptor_set_layout_info;
                         let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
-                        let sets = device.allocate_descriptor_sets(
+                        let dynamic_sets = device.allocate_descriptor_sets(
                             &vk::DescriptorSetAllocateInfo::builder()
                                 .descriptor_pool(*descriptor_pool)
-                                .set_layouts(&raster_pipe.descriptor_set_layout_info.all_layouts)
+                                .set_layouts(&layout_info.dynamic_layouts)
                                 .build(),
                         )?;
                         drop(descriptor_pool);
+
+                        let mut sets = vec![None; layout_info.all_layouts.len()];
+                        for (src, dst) in layout_info.dynamic_layout_indices.iter().enumerate() {
+                            sets[*dst] = Some(dynamic_sets[src]);
+                        }
+
                         sets
                     };
 
@@ -1613,12 +1648,15 @@ pub async fn raster_tex(
                 let mut descriptor_sets = descriptor_sets;
 
                 for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-                    descriptor_sets[*idx] = vk_all.bindless_buffers_descriptor_set;
+                    descriptor_sets[*idx] = Some(vk_all.bindless_buffers_descriptor_set);
                 }
 
                 for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-                    descriptor_sets[*idx] = vk_all.bindless_images_descriptor_set;
+                    descriptor_sets[*idx] = Some(vk_all.bindless_images_descriptor_set);
                 }
+
+                let descriptor_sets: Vec<_> =
+                    descriptor_sets.into_iter().map(Option::unwrap).collect();
 
                 device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
 
