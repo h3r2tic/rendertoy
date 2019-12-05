@@ -1,4 +1,4 @@
-use ash::extensions::nv::RayTracing;
+//use ash::extensions::nv::RayTracing;
 use ash::extensions::{
     ext::DebugReport,
     khr::{Surface, Swapchain},
@@ -7,7 +7,6 @@ use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
 use ash::{vk, Device, Entry, Instance};
 use std::error::Error;
 use std::ffi::{CStr, CString};
-use std::io::Cursor;
 use std::os::raw::{c_char, c_void};
 use std::sync::Mutex;
 
@@ -37,14 +36,14 @@ fn extension_names(graphics_debugging: bool) -> Vec<*const i8> {
 
 pub struct VkCommandBufferData {
     pub(crate) cb: vk::CommandBuffer,
-    pool: vk::CommandPool,
+    //pool: vk::CommandPool,
 }
 
 pub struct LinearUniformBuffer {
     write_head: std::sync::atomic::AtomicUsize,
     buffer: vk::Buffer,
     allocation: vk_mem::Allocation,
-    allocation_info: vk_mem::AllocationInfo,
+    //allocation_info: vk_mem::AllocationInfo,
     size: vk::DeviceSize,
     mapped_ptr: *mut u8,
     min_offset_alignment: usize,
@@ -66,27 +65,25 @@ impl LinearUniformBuffer {
             ..Default::default()
         };
 
-        unsafe {
-            let buffer_info = vk::BufferCreateInfo::builder()
-                .size(size)
-                .usage(usage)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .build();
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .build();
 
-            let (buffer, allocation, allocation_info) =
-                allocator.create_buffer(&buffer_info, &mem_info).unwrap();
+        let (buffer, allocation, _allocation_info) =
+            allocator.create_buffer(&buffer_info, &mem_info).unwrap();
 
-            let mapped_ptr: *mut u8 = allocator.map_memory(&allocation).expect("map_memory");
+        let mapped_ptr: *mut u8 = allocator.map_memory(&allocation).expect("map_memory");
 
-            Self {
-                write_head: std::sync::atomic::AtomicUsize::new(0),
-                buffer,
-                allocation,
-                allocation_info,
-                size,
-                mapped_ptr,
-                min_offset_alignment,
-            }
+        Self {
+            write_head: std::sync::atomic::AtomicUsize::new(0),
+            buffer,
+            allocation,
+            //allocation_info,
+            size,
+            mapped_ptr,
+            min_offset_alignment,
         }
     }
 
@@ -106,7 +103,10 @@ impl LinearUniformBuffer {
     pub fn unmap(&mut self) {
         if self.mapped_ptr != std::ptr::null_mut() {
             unsafe {
-                vk_all().allocator.unmap_memory(&self.allocation);
+                vk_all()
+                    .allocator
+                    .unmap_memory(&self.allocation)
+                    .expect("unmap_memory");
             }
             self.mapped_ptr = std::ptr::null_mut();
             self.write_head
@@ -278,7 +278,10 @@ fn allocate_frame_command_buffer(
             .unwrap()
     }[0];
 
-    VkCommandBufferData { cb, pool }
+    VkCommandBufferData {
+        cb,
+        //pool,
+    }
 }
 
 impl VkKitchenSink {
@@ -322,7 +325,7 @@ impl VkKitchenSink {
             let debug_report_loader;
             let debug_call_back;
 
-            if (graphics_debugging) {
+            if graphics_debugging {
                 let loader = DebugReport::new(&entry, &instance);
                 debug_call_back = Some(
                     loader
@@ -657,7 +660,7 @@ impl VkKitchenSink {
                 let cb = vk_frame.command_buffer.lock().unwrap();
                 let cb: vk::CommandBuffer = cb.cb;
 
-                unsafe {
+                {
                     vk_all.record_image_aspect_barrier(
                         cb,
                         vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
@@ -805,7 +808,7 @@ impl VkKitchenSink {
                 .binding_flags(&binding_flags)
                 .build();
 
-            let descriptor_set_layout = unsafe {
+            let descriptor_set_layout = {
                 device
                     .create_descriptor_set_layout(
                         &vk::DescriptorSetLayoutCreateInfo::builder()
@@ -849,23 +852,6 @@ impl VkKitchenSink {
                 .unwrap();
 
             descriptor_sets[0]
-        }
-    }
-
-    fn create_command_buffers(
-        &self,
-        pool: vk::CommandPool,
-        count: usize,
-    ) -> Vec<vk::CommandBuffer> {
-        unsafe {
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
-                .command_buffer_count(count as u32)
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-
-            self.device
-                .allocate_command_buffers(&command_buffer_allocate_info)
-                .unwrap()
         }
     }
 
@@ -955,14 +941,14 @@ impl Drop for VkKitchenSink {
     }
 }
 
-pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
+pub fn record_submit_commandbuffer<F: FnOnce(&Device)>(
     device: &Device,
     command_buffer: vk::CommandBuffer,
     submit_queue: vk::Queue,
     wait_mask: &[vk::PipelineStageFlags],
     wait_semaphores: &[vk::Semaphore],
     signal_semaphores: &[vk::Semaphore],
-    f: F,
+    render_fn: F,
 ) {
     unsafe {
         device
@@ -984,10 +970,10 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
         }
 
         {
-            let mut pool = vk_frame().descriptor_pool.lock().unwrap();
-            device.reset_descriptor_pool(*pool, Default::default());
-            //device.destroy_descriptor_pool(*pool, None);
-            //*pool = allocate_frame_descriptor_pool(device);
+            let pool = vk_frame().descriptor_pool.lock().unwrap();
+            device
+                .reset_descriptor_pool(*pool, Default::default())
+                .expect("reset_descriptor_pool");
             drop(pool);
         }
 
@@ -998,20 +984,16 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
             .expect("Begin commandbuffer");
 
-        unsafe {
-            vk_frame_mut().uniforms.map();
-        }
+        vk_frame_mut().uniforms.map();
 
         for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
-            unsafe { f(vk_all(), vk_frame()) };
+            f(vk_all(), vk_frame());
         }
 
-        f(device, command_buffer);
+        render_fn(device);
 
-        unsafe {
-            for fd in VK_KITCHEN_SINK.as_mut().unwrap().frame_data.iter_mut() {
-                fd.uniforms.unmap();
-            }
+        for fd in VK_KITCHEN_SINK.as_mut().unwrap().frame_data.iter_mut() {
+            fd.uniforms.unmap();
         }
 
         device
@@ -1019,7 +1001,7 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
             .expect("End commandbuffer");
 
         let submit_fence = vk_frame().submit_done_fence;
-        device.reset_fences(&[submit_fence]);
+        device.reset_fences(&[submit_fence]).expect("reset_fences");
 
         let command_buffers = vec![command_buffer];
 
@@ -1049,9 +1031,7 @@ pub fn vk_device() -> &'static Device {
 }
 
 pub unsafe fn vk_begin_frame(data_idx: usize) {
-    unsafe {
-        VK_CURRENT_FRAME_DATA_IDX = data_idx;
-    }
+    VK_CURRENT_FRAME_DATA_IDX = data_idx;
 }
 
 pub unsafe fn vk_all() -> &'static VkKitchenSink {
@@ -1070,14 +1050,12 @@ pub unsafe fn vk_frame() -> &'static VkFrameData {
 
 pub(crate) unsafe fn vk_frame_mut() -> &'static mut VkFrameData {
     assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
-    unsafe {
-        std::mem::transmute(
-            &mut VK_KITCHEN_SINK
-                .as_mut()
-                .expect("vk kitchen sink")
-                .frame_data[VK_CURRENT_FRAME_DATA_IDX],
-        )
-    }
+    std::mem::transmute(
+        &mut VK_KITCHEN_SINK
+            .as_mut()
+            .expect("vk kitchen sink")
+            .frame_data[VK_CURRENT_FRAME_DATA_IDX],
+    )
 }
 
 lazy_static! {

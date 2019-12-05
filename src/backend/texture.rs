@@ -1,6 +1,6 @@
 use super::transient_resource::*;
 use crate::{vk, vulkan::*};
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+use ash::version::DeviceV1_0;
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct TextureKey {
@@ -105,7 +105,6 @@ impl ImageResource {
         extent: vk::Extent3D,
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
-        memory_flags: vk::MemoryPropertyFlags,
     ) {
         unsafe {
             let mem_info = vk_mem::AllocationCreateInfo {
@@ -124,7 +123,7 @@ impl ImageResource {
                     .build(),
             );
 
-            let mut create_info = vk::ImageCreateInfo::builder()
+            let create_info = vk::ImageCreateInfo::builder()
                 .image_type(image_type)
                 .format(storage_format)
                 .extent(extent)
@@ -245,7 +244,6 @@ impl TransientResource for Texture {
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::STORAGE
                 | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
 
         img.create_view(

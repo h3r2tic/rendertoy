@@ -30,47 +30,8 @@ pub async fn load_tex(ctx: Context, path: &AssetPath) -> Result<Texture> {
     Ok((*tex).clone())
 }
 
-fn make_gl_tex<Img>(
-    img: &Img,
-    dims: (u32, u32),
-    internal_format: u32,
-    layout: u32,
-) -> Result<Texture>
-where
-    Img: image::GenericImageView + 'static,
-{
-    let img_flipped = image::imageops::flip_vertical(img);
-
-    unimplemented!()
-    /*with_gl(|gl| {
-        let res = backend::texture::create_texture(
-            gl,
-            TextureKey {
-                width: dims.0,
-                height: dims.1,
-                format: internal_format,
-            },
-        );
-        unsafe {
-            gl.BindTexture(gl::TEXTURE_2D, res.texture_id);
-            gl.TexSubImage2D(
-                gl::TEXTURE_2D,
-                0,
-                0,
-                0,
-                dims.0 as i32,
-                dims.1 as i32,
-                layout,
-                gl::UNSIGNED_BYTE,
-                std::mem::transmute(img_flipped.into_raw().as_ptr()),
-            );
-        }
-        Ok(res)
-    })*/
-}
-
 fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
-    use image::{DynamicImage, GenericImageView, ImageBuffer};
+    use image::GenericImageView;
 
     let image = image::load_from_memory(&blob.contents)?;
     let image_dimensions = image.dimensions();
@@ -95,8 +56,7 @@ fn load_tex_impl(
 ) -> Result<Texture> {
     use crate::vulkan::*;
     use ash::util::Align;
-    use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
-    use image::{DynamicImage, GenericImageView, ImageBuffer};
+    use ash::version::DeviceV1_0;
 
     let device = vk_device();
     let image_buffer_info = vk::BufferCreateInfo {
@@ -129,7 +89,10 @@ fn load_tex_impl(
         );
 
         image_slice.copy_from_slice(image_data);
-        vk_all().allocator.unmap_memory(&buffer_allocation);
+        vk_all()
+            .allocator
+            .unmap_memory(&buffer_allocation)
+            .expect("unmap_memory");
     }
 
     let res = backend::texture::create_texture(TextureKey {
@@ -154,17 +117,15 @@ fn load_tex_impl(
         let cb = vk_frame.command_buffer.lock().unwrap();
         let cb: vk::CommandBuffer = cb.cb;
 
-        unsafe {
-            vk_all.record_image_barrier(
-                cb,
-                ImageBarrier::new(
-                    res_image,
-                    vk_sync::AccessType::Nothing,
-                    vk_sync::AccessType::TransferWrite,
-                )
-                .with_discard(true),
+        vk_all.record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                res_image,
+                vk_sync::AccessType::Nothing,
+                vk_sync::AccessType::TransferWrite,
             )
-        };
+            .with_discard(true),
+        );
 
         let buffer_copy_regions = vk::BufferImageCopy::builder()
             .image_subresource(
@@ -228,7 +189,7 @@ fn load_tex_impl(
 }
 
 fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
-    let mut img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
+    let _img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
 
     unimplemented!()
     /*

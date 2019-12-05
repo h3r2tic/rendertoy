@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use std::collections::HashMap;
 use std::default::Default;
 use std::mem::replace;

@@ -1,7 +1,7 @@
 pub use crate::backend::buffer::{Buffer, BufferKey};
 use crate::backend::{self};
 use crate::{vk, vulkan::*};
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+use ash::version::DeviceV1_0;
 
 use snoozy::*;
 use std::mem::size_of;
@@ -80,7 +80,7 @@ where
     let size_bytes = contents.len() * size_of_t;
     let res = backend::buffer::create_buffer(BufferKey::new(size_bytes, texture_format));
 
-    let (staging_buffer, staging_allocation, staging_allocation_info) = unsafe {
+    let (staging_buffer, staging_allocation, _staging_allocation_info) = unsafe {
         let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::TRANSFER_SRC;
 
         let mem_info = vk_mem::AllocationCreateInfo {
@@ -110,7 +110,10 @@ where
         std::slice::from_raw_parts_mut(mapped_ptr as *mut u8, size_bytes).copy_from_slice(
             &std::slice::from_raw_parts(contents.as_ptr() as *const u8, size_bytes),
         );
-        vk_all().allocator.unmap_memory(&staging_allocation);
+        vk_all()
+            .allocator
+            .unmap_memory(&staging_allocation)
+            .expect("unmap_memory");
     }
 
     let copy_dst_buffer = res.buffer;
@@ -162,7 +165,7 @@ pub async fn upload_array_tex_buffer<
     T: Sized + Copy + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
-    ctx: Context,
+    _ctx: Context,
     contents: &C,
     texture_format: &vk::Format,
 ) -> Result<Buffer> {

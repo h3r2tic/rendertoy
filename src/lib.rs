@@ -372,12 +372,11 @@ impl Rendertoy {
                 match event {
                     winit::Event::WindowEvent { event, .. } => match event {
                         winit::WindowEvent::CloseRequested => running = false,
-                        winit::WindowEvent::Resized(logical_size) => {
+                        /*winit::WindowEvent::Resized(logical_size) => {
                             let dpi_factor = self.window.get_hidpi_factor();
                             let phys_size = logical_size.to_physical(dpi_factor);
-
-                            //windowed_context.resize(phys_size);
-                        }
+                            windowed_context.resize(phys_size);
+                        }*/
                         winit::WindowEvent::KeyboardInput { input, .. } => {
                             if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
                                 if input.state == ElementState::Pressed {
@@ -496,7 +495,6 @@ impl Rendertoy {
             });
 
             // TODO
-            let gfx = Gfx {};
             //draw_fullscreen_texture(final_texture, state.window_size_pixels);
 
             // TODO: copy output to screen
@@ -684,11 +682,11 @@ impl Rendertoy {
         );
     }*/
 
-    pub fn draw_forever<F>(mut self, mut callback: F) -> snoozy::Result<()>
+    pub fn draw_forever<F>(mut self, mut callback: F)
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+        use ash::version::DeviceV1_0;
         use vulkan::*;
 
         /*let vg_context = with_gl(|_| {
@@ -746,7 +744,8 @@ impl Rendertoy {
         let present_descriptor_sets =
             vk.create_present_descriptor_sets(present_descriptor_set_layout);
         let present_pipeline =
-            create_present_compute_pipeline(&vk.device, present_descriptor_set_layout)?;
+            create_present_compute_pipeline(&vk.device, present_descriptor_set_layout)
+                .expect("create_present_compute_pipeline");
 
         let mut running = true;
         while running {
@@ -781,7 +780,7 @@ impl Rendertoy {
                 &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
                 &[vk.swapchain_acquired_semaphores[swapchain_acquired_semaphore_idx]],
                 &[vk_frame.rendering_complete_semaphore],
-                |_device, command_buffer| {
+                |_device| {
                     let present_image = vk_frame.present_image;
 
                     vk.record_image_barrier(
@@ -902,8 +901,6 @@ impl Rendertoy {
 
             running = self.next_frame();
         }
-
-        Ok(())
     }
 }
 
@@ -999,8 +996,8 @@ fn create_present_compute_pipeline(
     vk_device: &ash::Device,
     descriptor_set_layout: vk::DescriptorSetLayout,
 ) -> snoozy::Result<crate::shader::ComputePipeline> {
-    use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
-    use std::ffi::{CStr, CString};
+    use ash::version::DeviceV1_0;
+    use std::ffi::CString;
     use std::io::Cursor;
 
     let shader_entry_name = CString::new("main").unwrap();

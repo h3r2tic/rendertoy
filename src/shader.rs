@@ -1,18 +1,16 @@
-use crate::backend::{self, render_buffer::*};
 use crate::blob::*;
 use crate::buffer::Buffer;
 use crate::gpu_debugger;
-use crate::gpu_profiler;
+//use crate::gpu_profiler;
 use crate::texture::{Texture, TextureKey};
 use crate::vulkan::*;
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+use ash::version::DeviceV1_0;
 use ash::{vk, Device};
 use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
 use snoozy::futures::future::{try_join_all, BoxFuture, FutureExt};
 use snoozy::*;
 use std::collections::HashMap;
-use std::ffi::CStr;
 
 macro_rules! def_shader_uniform_types {
     (@resolved_type SnoozyRef<ShaderUniformBundle>) => {
@@ -301,7 +299,6 @@ fn shaderc_compile_glsl(
     source: &[shader_prepper::SourceChunk],
     shader_kind: shaderc::ShaderKind,
 ) -> Result<shaderc::CompilationArtifact> {
-    use shaderc;
     let source = get_shader_text(source);
     shaderc_compile_glsl_str(shader_name, &source, shader_kind)
 }
@@ -311,8 +308,6 @@ fn shaderc_compile_glsl_str(
     source: &str,
     shader_kind: shaderc::ShaderKind,
 ) -> Result<shaderc::CompilationArtifact> {
-    use shaderc;
-
     let mut compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
     options.add_macro_definition("EP", Some("main"));
@@ -323,7 +318,7 @@ fn shaderc_compile_glsl_str(
         .compile_into_spirv(
             source,
             shader_kind,
-            "shader.glsl",
+            shader_name,
             "main",
             Some(&options),
         )
@@ -543,8 +538,7 @@ fn create_compute_pipeline(
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     shader_code: &[u32],
 ) -> Result<ComputePipeline> {
-    use std::ffi::{CStr, CString};
-    use std::io::Cursor;
+    use std::ffi::CString;
 
     let shader_entry_name = CString::new("main").unwrap();
 
@@ -614,10 +608,11 @@ fn compact_descriptor_sets(refl: &mut spirv_reflect::ShaderModule, set_idx_offse
         .enumerate_descriptor_sets(entry)
         .expect("enumerate_descriptor_sets");
     let mut set_order: Vec<_> = sets.iter().enumerate().map(|(i, s)| (i, s.set)).collect();
-    set_order.sort_by_key(|(i, set_idx)| *set_idx);
+    set_order.sort_by_key(|(_, set_idx)| *set_idx);
     let set_count = set_order.len();
     for (new_idx, (old_idx, _)) in set_order.into_iter().enumerate() {
-        refl.change_descriptor_set_number(&sets[old_idx], new_idx as u32 + set_idx_offset);
+        refl.change_descriptor_set_number(&sets[old_idx], new_idx as u32 + set_idx_offset)
+            .expect("change_descriptor_set_number");
     }
     set_count as u32
 }
@@ -769,8 +764,7 @@ pub async fn make_raster_pipeline(
     ctx: Context,
     shaders_in: &Vec<SnoozyRef<RasterSubShader>>,
 ) -> Result<RasterPipeline> {
-    use std::ffi::{CStr, CString};
-    use std::mem;
+    use std::ffi::CString;
 
     let mut shaders = Vec::with_capacity(shaders_in.len());
     for a in shaders_in.iter() {
@@ -895,8 +889,6 @@ pub async fn make_raster_pipeline(
             ..Default::default()
         };
 
-        let vk_all = unsafe { vk_all() };
-
         let viewport_state_info = vk::PipelineViewportStateCreateInfo::builder()
             .viewport_count(1)
             .scissor_count(1);
@@ -1015,16 +1007,7 @@ pub async fn make_raster_pipeline(
     }
 }
 
-#[derive(Default)]
-struct ShaderUniformPlumber {
-    img_unit: i32,
-    ssbo_unit: u32,
-    ubo_unit: u32,
-    index_count: Option<u32>,
-    warnings: Vec<String>,
-}
-
-pub enum PlumberEvent {
+pub enum FlattenedUniformEvent {
     SetUniform {
         name: String,
         value: ResolvedShaderUniformValue,
@@ -1035,14 +1018,8 @@ pub enum PlumberEvent {
 
 fn flatten_uniforms(
     mut uniforms: Vec<ResolvedShaderUniformHolder>,
-    sink: &mut impl FnMut(PlumberEvent),
+    sink: &mut impl FnMut(FlattenedUniformEvent),
 ) {
-    macro_rules! scope_event {
-        ($event_type: expr) => {
-            uniform_handler_fn($event_type);
-        };
-    }
-
     // Do non-bundle values first so that they become visible to bundle handlers
     for uniform in uniforms.iter_mut() {
         match uniform.value {
@@ -1058,12 +1035,12 @@ fn flatten_uniforms(
                     1f32 / value.key.height as f32,
                 );
 
-                sink(PlumberEvent::SetUniform {
+                sink(FlattenedUniformEvent::SetUniform {
                     name: name.clone() + "_size",
                     value: ResolvedShaderUniformValue::Vec4(tex_size_uniform),
                 });
 
-                sink(PlumberEvent::SetUniform {
+                sink(FlattenedUniformEvent::SetUniform {
                     name,
                     value: match &uniform.value {
                         ResolvedShaderUniformValue::Texture(ref value) => {
@@ -1081,7 +1058,7 @@ fn flatten_uniforms(
                 let value =
                     std::mem::replace(&mut uniform.value, ResolvedShaderUniformValue::Int32(0));
 
-                sink(PlumberEvent::SetUniform { name, value });
+                sink(FlattenedUniformEvent::SetUniform { name, value });
             }
         }
     }
@@ -1090,9 +1067,9 @@ fn flatten_uniforms(
     for uniform in uniforms.into_iter() {
         match uniform.value {
             ResolvedShaderUniformValue::Bundle(bundle) => {
-                sink(PlumberEvent::EnterScope);
+                sink(FlattenedUniformEvent::EnterScope);
                 flatten_uniforms(bundle, sink);
-                sink(PlumberEvent::LeaveScope);
+                sink(FlattenedUniformEvent::LeaveScope);
             }
             _ => {}
         }
@@ -1170,9 +1147,7 @@ fn update_descriptor_sets<'a>(
 
         for refl in refl {
             let entry = Some("main");
-            for (ds_idx, descriptor_set) in
-                refl.enumerate_descriptor_sets(entry)?.iter().enumerate()
-            {
+            for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
                 for binding in descriptor_set.bindings.iter() {
                     use spirv_reflect::types::descriptor::ReflectDescriptorType;
 
@@ -1396,7 +1371,7 @@ pub async fn compute_tex(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let output_tex = backend::texture::create_texture(*key);
+    let output_tex = crate::backend::texture::create_texture(*key);
     let cs = ctx.get(cs).await?;
 
     let mut uniforms = resolve(ctx, uniforms.clone()).await?;
@@ -1412,7 +1387,7 @@ pub async fn compute_tex(
 
     let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
     flatten_uniforms(uniforms, &mut |e| {
-        if let PlumberEvent::SetUniform { name, value } = e {
+        if let FlattenedUniformEvent::SetUniform { name, value } = e {
             flattened_uniforms.insert(name, value);
         }
     });
@@ -1518,7 +1493,7 @@ pub async fn raster_tex(
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let output_tex = backend::texture::create_texture(*key);
+    let output_tex = crate::backend::texture::create_texture(*key);
     let raster_pipe = ctx.get(raster_pipe).await?;
 
     let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
@@ -1573,7 +1548,7 @@ pub async fn raster_tex(
             raster_pipe.framebuffer
         } else {
             // HACK; must not do this, but validation layers are broken with IMAGELESS_KHR
-            let mut fbo_desc = vk::FramebufferCreateInfo::builder()
+            let fbo_desc = vk::FramebufferCreateInfo::builder()
                 .render_pass(raster_pipe.render_pass)
                 .width(width as _)
                 .height(height as _)
@@ -1707,7 +1682,7 @@ pub async fn raster_tex(
 
     let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
     flatten_uniforms(uniforms, &mut |e| match e {
-        PlumberEvent::SetUniform { name, value } => {
+        FlattenedUniformEvent::SetUniform { name, value } => {
             match value {
                 ResolvedShaderUniformValue::Buffer(ref buf) if name == "mesh_index_buf" => {
                     mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer);
@@ -1720,10 +1695,10 @@ pub async fn raster_tex(
 
             flattened_uniforms.insert(name, value);
         }
-        PlumberEvent::EnterScope => {
+        FlattenedUniformEvent::EnterScope => {
             mesh_stack.push(Default::default());
         }
-        PlumberEvent::LeaveScope => {
+        FlattenedUniformEvent::LeaveScope => {
             let mesh = mesh_stack.pop().unwrap();
             if let Some(index_count) = mesh.index_count {
                 if let Some(index_buffer) = mesh.index_buffer {

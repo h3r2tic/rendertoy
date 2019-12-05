@@ -1,6 +1,6 @@
 use super::transient_resource::*;
 use crate::{vk, vulkan::*};
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1};
+use ash::version::DeviceV1_0;
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct BufferKey {
@@ -65,7 +65,7 @@ impl TransientResource for Buffer {
                 ..Default::default()
             };
 
-            let (buffer, allocation, allocation_info) = unsafe {
+            let (buffer, allocation, allocation_info) = {
                 let buffer_info = vk::BufferCreateInfo::builder()
                     .size(key.size_bytes as u64)
                     .usage(usage)
