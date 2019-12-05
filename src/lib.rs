@@ -456,7 +456,11 @@ impl Rendertoy {
         self.frame_time_display_cooldown += dt.as_secs_f32();
         if self.frame_time_display_cooldown > 1.0 {
             self.frame_time_display_cooldown = 0.0;
-            dbg!(self.average_frame_time);
+            println!(
+                "frame time: {:.2}ms ({:.2} fps)",
+                self.average_frame_time * 1000.0,
+                1.0 / self.average_frame_time
+            );
         }
 
         let state = FrameState {
