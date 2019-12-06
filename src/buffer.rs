@@ -143,7 +143,23 @@ where
             );
         };
 
-        // TODO: barrier
+        {
+            let global_barrier = vk_sync::GlobalBarrier {
+                previous_accesses: &[vk_sync::AccessType::TransferWrite],
+                next_accesses: &[
+                    vk_sync::AccessType::AnyShaderReadUniformBuffer,
+                    vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                ],
+            };
+
+            vk_sync::cmd::pipeline_barrier(
+                vk_all.device.fp_v1_0(),
+                cb,
+                Some(global_barrier),
+                &[],
+                &[],
+            );
+        }
     });
 
     Ok(res)

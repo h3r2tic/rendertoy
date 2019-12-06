@@ -43,7 +43,7 @@ pub struct LinearUniformBuffer {
     write_head: std::sync::atomic::AtomicUsize,
     buffer: vk::Buffer,
     allocation: vk_mem::Allocation,
-    //allocation_info: vk_mem::AllocationInfo,
+    allocation_info: vk_mem::AllocationInfo,
     size: vk::DeviceSize,
     mapped_ptr: *mut u8,
     min_offset_alignment: usize,
@@ -71,7 +71,7 @@ impl LinearUniformBuffer {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .build();
 
-        let (buffer, allocation, _allocation_info) =
+        let (buffer, allocation, allocation_info) =
             allocator.create_buffer(&buffer_info, &mem_info).unwrap();
 
         let mapped_ptr: *mut u8 = allocator.map_memory(&allocation).expect("map_memory");
@@ -80,7 +80,7 @@ impl LinearUniformBuffer {
             write_head: std::sync::atomic::AtomicUsize::new(0),
             buffer,
             allocation,
-            //allocation_info,
+            allocation_info,
             size,
             mapped_ptr,
             min_offset_alignment,
@@ -102,6 +102,18 @@ impl LinearUniformBuffer {
 
     pub fn unmap(&mut self) {
         if self.mapped_ptr != std::ptr::null_mut() {
+            let bytes_written = self
+                .write_head
+                .swap(0, std::sync::atomic::Ordering::Relaxed);
+
+            let mapped_ranges = [vk::MappedMemoryRange {
+                memory: self.allocation_info.get_device_memory(),
+                offset: self.allocation_info.get_offset() as vk::DeviceSize,
+                size: bytes_written as vk::DeviceSize,
+                ..Default::default()
+            }];
+            unsafe { vk_device().flush_mapped_memory_ranges(&mapped_ranges) }.unwrap();
+
             unsafe {
                 vk_all()
                     .allocator
@@ -109,8 +121,6 @@ impl LinearUniformBuffer {
                     .expect("unmap_memory");
             }
             self.mapped_ptr = std::ptr::null_mut();
-            self.write_head
-                .store(0, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -158,6 +168,7 @@ pub struct VkKitchenSink {
     pub instance: Instance,
     pub device: Device,
     pub device_properties: vk::PhysicalDeviceProperties,
+    pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub surface_loader: Surface,
     pub swapchain_loader: Swapchain,
     pub debug_report_loader: Option<DebugReport>,
@@ -375,6 +386,7 @@ impl VkKitchenSink {
 
             let present_queue_family_index = present_queue_family_index as u32;
             let device_properties = instance.get_physical_device_properties(pdevice);
+            let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
 
             let device_extension_names_raw = vec![
                 Swapchain::name().as_ptr(),
@@ -679,6 +691,7 @@ impl VkKitchenSink {
                 instance,
                 device,
                 device_properties,
+                device_memory_properties,
                 present_queue_family_index,
                 pdevice,
                 surface_loader,
@@ -759,7 +772,7 @@ impl VkKitchenSink {
             let descriptor_sizes = [
                 vk::DescriptorPoolSize {
                     ty: vk::DescriptorType::SAMPLED_IMAGE,
-                    descriptor_count: self.frame_data.len() as u32,
+                    descriptor_count: (self.frame_data.len() as u32) * 2,
                 },
                 vk::DescriptorPoolSize {
                     ty: vk::DescriptorType::STORAGE_IMAGE,

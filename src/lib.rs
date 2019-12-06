@@ -8,6 +8,7 @@ mod camera;
 mod consts;
 mod gpu_debugger;
 mod gpu_profiler;
+mod gui;
 mod keyboard;
 mod mesh;
 mod package;
@@ -68,6 +69,9 @@ extern crate abomonation_derive;
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 
+use imgui::Context as GuiContext;
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
+
 use clap::ArgMatches;
 use std::str::FromStr;
 
@@ -127,9 +131,17 @@ pub struct Rendertoy {
     selected_debug_name: Option<String>,
     locked_debug_name: Option<String>,
     last_frame_instant: std::time::Instant,
+    dt: f32,
     show_gui: bool,
     average_frame_time: f32,
     frame_time_display_cooldown: f32,
+
+    imgui: GuiContext,
+    imgui_platform: WinitPlatform,
+    imgui_renderer: ash_imgui::Renderer,
+    imgui_render_pass: vk::RenderPass,
+    imgui_framebuffer: vk::Framebuffer,
+    imgui_texture: Texture,
 }
 
 #[derive(Clone)]
@@ -233,6 +245,50 @@ impl Rendertoy {
             VkKitchenSink::new(&window, cfg.graphics_debugging).unwrap(),
         );
 
+        let mut imgui = GuiContext::create();
+        let mut imgui_platform = WinitPlatform::init(&mut imgui);
+        imgui_platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
+
+        {
+            use imgui::{FontConfig, FontGlyphRanges, FontSource};
+
+            let hidpi_factor = imgui_platform.hidpi_factor();
+            let font_size = (13.0 * hidpi_factor) as f32;
+            imgui.fonts().add_font(&[
+                FontSource::DefaultFontData {
+                    config: Some(FontConfig {
+                        size_pixels: font_size,
+                        ..FontConfig::default()
+                    }),
+                },
+                FontSource::TtfData {
+                    data: include_bytes!("../assets/fonts/Roboto-Regular.ttf"),
+                    size_pixels: font_size,
+                    config: Some(FontConfig {
+                        rasterizer_multiply: 1.75,
+                        glyph_ranges: FontGlyphRanges::japanese(),
+                        ..FontConfig::default()
+                    }),
+                },
+            ]);
+
+            imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
+        }
+
+        let imgui_renderer = {
+            let vk = unsafe { vulkan::vk_all() };
+            ash_imgui::Renderer::new(
+                &vk.device,
+                &vk.device_properties,
+                &vk.device_memory_properties,
+                &mut imgui,
+            )
+        };
+
+        let imgui_render_pass = crate::gui::create_imgui_render_pass(vulkan::vk_device());
+        let (imgui_framebuffer, imgui_texture) =
+            crate::gui::create_imgui_framebuffer(vulkan::vk_device(), imgui_render_pass);
+
         /*let windowed_context = winit::ContextBuilder::new()
             .with_vsync(cfg.vsync)
             .with_gl_debug_flag(cfg.graphics_debugging)
@@ -309,9 +365,16 @@ impl Rendertoy {
             selected_debug_name: None,
             locked_debug_name: None,
             last_frame_instant: std::time::Instant::now(),
+            dt: 0.0,
             show_gui: true,
             average_frame_time: 0.0,
             frame_time_display_cooldown: 0.0,
+            imgui,
+            imgui_platform,
+            imgui_renderer,
+            imgui_render_pass,
+            imgui_framebuffer,
+            imgui_texture,
         }
     }
 
@@ -356,7 +419,16 @@ impl Rendertoy {
 
     fn next_frame(&mut self) -> bool {
         let mut events = Vec::new();
-        self.events_loop.poll_events(|event| events.push(event));
+        {
+            let imgui_platform = &mut self.imgui_platform;
+            let imgui = &mut self.imgui;
+            let window = &self.window;
+
+            self.events_loop.poll_events(|event| {
+                imgui_platform.handle_event(imgui.io_mut(), window, &event);
+                events.push(event);
+            });
+        }
 
         //with_gl_and_context(|_, windowed_context|
         {
@@ -444,16 +516,16 @@ impl Rendertoy {
         let now = std::time::Instant::now();
         let dt = now - self.last_frame_instant;
         self.last_frame_instant = now;
+        self.dt = dt.as_secs_f32();
 
         self.average_frame_time = if 0.0f32 == self.average_frame_time {
-            dt.as_secs_f32()
+            self.dt
         } else {
-            let dt = dt.as_secs_f32();
-            let blend = (-4.0 * dt).exp();
-            self.average_frame_time * blend + dt * (1.0 - blend)
+            let blend = (-4.0 * self.dt).exp();
+            self.average_frame_time * blend + self.dt * (1.0 - blend)
         };
 
-        self.frame_time_display_cooldown += dt.as_secs_f32();
+        self.frame_time_display_cooldown += self.dt;
         if self.frame_time_display_cooldown > 1.0 {
             self.frame_time_display_cooldown = 0.0;
             println!(
@@ -467,7 +539,7 @@ impl Rendertoy {
             mouse: &self.mouse_state,
             keys: &self.keyboard,
             window_size_pixels,
-            dt: dt.as_secs_f32(),
+            dt: self.dt,
         };
 
         let tex = callback(&state);
@@ -727,15 +799,21 @@ impl Rendertoy {
                                 .build(),
                             vk::DescriptorSetLayoutBinding::builder()
                                 .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                                 .binding(1)
                                 .build(),
                             vk::DescriptorSetLayoutBinding::builder()
                                 .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLER)
+                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                                 .binding(2)
+                                .build(),
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::SAMPLER)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(3)
                                 .immutable_samplers(&[vk.samplers[vulkan::SAMPLER_LINEAR]])
                                 .build(),
                         ])
@@ -799,6 +877,84 @@ impl Rendertoy {
 
                     let final_texture = self.draw_with_frame_snapshot(&mut callback);
 
+                    self.imgui_platform
+                        .prepare_frame(self.imgui.io_mut(), &self.window)
+                        .expect("Failed to prepare frame");
+                    self.imgui.io_mut().delta_time = self.dt;
+                    let ui = self.imgui.frame();
+                    {
+                        use imgui::im_str;
+
+                        ui.text(im_str!("Hello world!"));
+                        ui.text(im_str!("こんにちは世界！"));
+                        ui.text(im_str!("This...is...imgui-rs!"));
+                        ui.separator();
+                        let mouse_pos = ui.io().mouse_pos;
+                        ui.text(format!(
+                            "Mouse Position: ({:.1},{:.1})",
+                            mouse_pos[0], mouse_pos[1]
+                        ));
+                    }
+                    self.imgui_platform.prepare_render(&ui, &self.window);
+                    let draw_data = ui.render();
+
+                    if !self.imgui_renderer.has_pipeline() {
+                        self.imgui_renderer
+                            .create_pipeline(vk_device(), self.imgui_render_pass);
+                    }
+
+                    unsafe { vk_all() }.record_image_barrier(
+                        cb,
+                        ImageBarrier::new(
+                            self.imgui_texture.image,
+                            vk_sync::AccessType::Nothing,
+                            vk_sync::AccessType::ColorAttachmentWrite,
+                        )
+                        .with_discard(true),
+                    );
+
+                    self.imgui_renderer.begin_frame(vk_device(), cb);
+
+                    {
+                        let clear_values = [vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 0.0],
+                            },
+                        }];
+
+                        let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
+                            .render_pass(self.imgui_render_pass)
+                            .framebuffer(self.imgui_framebuffer)
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: unsafe { vk_all() }.surface_resolution,
+                            })
+                            .clear_values(&clear_values);
+
+                        unsafe {
+                            vk_device().cmd_begin_render_pass(
+                                cb,
+                                &render_pass_begin_info,
+                                vk::SubpassContents::INLINE,
+                            );
+                        }
+                    }
+
+                    self.imgui_renderer.render(&draw_data, vk_device(), cb);
+
+                    unsafe {
+                        vk_device().cmd_end_render_pass(cb);
+                    }
+
+                    unsafe { vk_all() }.record_image_barrier(
+                        cb,
+                        ImageBarrier::new(
+                            self.imgui_texture.image,
+                            vk_sync::AccessType::ColorAttachmentWrite,
+                            vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+                        ),
+                    );
+
                     unsafe {
                         vk.device.update_descriptor_sets(
                             &[
@@ -815,6 +971,16 @@ impl Rendertoy {
                                 vk::WriteDescriptorSet::builder()
                                     .dst_set(present_descriptor_sets[present_index])
                                     .dst_binding(1)
+                                    .dst_array_element(0)
+                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                    .image_info(&[vk::DescriptorImageInfo::builder()
+                                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                        .image_view(self.imgui_texture.view)
+                                        .build()])
+                                    .build(),
+                                vk::WriteDescriptorSet::builder()
+                                    .dst_set(present_descriptor_sets[present_index])
+                                    .dst_binding(2)
                                     .dst_array_element(0)
                                     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                                     .image_info(&[vk::DescriptorImageInfo::builder()
@@ -879,9 +1045,6 @@ impl Rendertoy {
                     .queue_present(vk.present_queue, &present_info)
                     .unwrap();
             }
-
-            // TODO: flush mapped uniform buffer ranges
-            // TODO: submit main command buffer
 
             //with_gl_and_context(|gl, windowed_context|
             {

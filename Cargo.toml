@@ -37,3 +37,7 @@ spirv-reflect = "0.2.3"
 rspirv = "0.5.4"
 spirv_headers = "1.4.1"
 rpmalloc = "0.1.0"
+
+ash-imgui = { path = "ash-imgui" }
+imgui = { git = "https://github.com/Gekkio/imgui-rs.git", revision = "ffff82d" }
+imgui-winit-support = { git = "https://github.com/Gekkio/imgui-rs.git", revision = "ffff82d", features = ["winit-19"] }
