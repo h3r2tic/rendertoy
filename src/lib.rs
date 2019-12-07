@@ -246,6 +246,8 @@ impl Rendertoy {
         );
 
         let mut imgui = GuiContext::create();
+        crate::gui::setup_imgui_style(&mut imgui);
+
         let mut imgui_platform = WinitPlatform::init(&mut imgui);
         imgui_platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
 
