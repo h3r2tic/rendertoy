@@ -241,7 +241,7 @@ pub fn setup_imgui_style(ctx: &mut imgui::Context) {
     let style = ctx.style_mut();
     style.colors[imgui::StyleColor::Text as usize] = text(0.78);
     style.colors[imgui::StyleColor::TextDisabled as usize] = text(0.28);
-    style.colors[imgui::StyleColor::WindowBg as usize] = [0.13, 0.14, 0.17, 1.00];
+    style.colors[imgui::StyleColor::WindowBg as usize] = [0.13, 0.14, 0.17, 0.7];
     style.colors[imgui::StyleColor::ChildBg as usize] = bg(0.58);
     style.colors[imgui::StyleColor::PopupBg as usize] = bg(0.9);
     style.colors[imgui::StyleColor::Border as usize] = [0.31, 0.31, 1.00, 0.00];

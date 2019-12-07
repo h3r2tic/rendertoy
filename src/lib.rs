@@ -540,12 +540,12 @@ impl Rendertoy {
         currently_debugged_texture: &Option<String>,
     ) -> Option<String> {
         let mut selected_name = None;
-        let fps = format!("FPS: {:.1}", 1.0 / average_frame_time);
-        ui.text(fps);
+        ui.text(format!("Frame time: {:.2}ms ({:.1} fps)", 1000.0 * average_frame_time, 1.0 / average_frame_time));
         //let mut total_time_ms = 0.0;
 
-        for (name, scope) in stats.scopes.iter() {
-            let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
+        for (name, _scope) in stats.scopes.iter() {
+            //let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
+            let text = name;
 
             let style = if Some(name) == currently_debugged_texture.as_ref() {
                 Some(ui.push_style_color(imgui::StyleColor::Text, [1.0, 0.25, 0.0625, 1.0]))
