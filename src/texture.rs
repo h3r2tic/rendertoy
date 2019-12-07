@@ -35,7 +35,7 @@ fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
 
     let image = image::load_from_memory(&blob.contents)?;
     let image_dimensions = image.dimensions();
-    println!("Loaded image: {:?} {:?}", image_dimensions, image.color());
+    tracing::info!("Loaded image: {:?} {:?}", image_dimensions, image.color());
 
     // TODO: don't
     let image = image.to_rgba();
@@ -201,7 +201,7 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
         }
     }
 
-    println!("Loaded image: {}x{} HDR", img.width, img.height);
+    tracing::info!("Loaded image: {}x{} HDR", img.width, img.height);
 
     with_gl(|gl| {
         let res = backend::texture::create_texture(

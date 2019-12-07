@@ -25,7 +25,7 @@ impl FileWatcher {
                     }
                     //println!("Detected file modification: {:?}", path)
                 }
-                Err(e) => println!("watch error: {:?}", e),
+                Err(e) => tracing::error!("watch error: {:?}", e),
                 _ => (),
             }
         });

@@ -10,10 +10,12 @@ pub struct Blob {
 
 #[snoozy]
 pub async fn load_blob(ctx: Context, path: &AssetPath) -> Result<Blob> {
+    ctx.set_debug_name(&path.asset_name);
+
     let mut buffer = Vec::new();
     let file_path = path.to_path_lossy(ctx.clone()).await?;
 
-    println!("Loading {}\n    -> {}", path, file_path);
+    tracing::info!("Loading {}\n    -> {}", path, file_path);
 
     std::io::Read::read_to_end(&mut File::open(&file_path)?, &mut buffer)?;
     crate::backend::file::watch_file(&file_path, ctx.get_invalidation_trigger());

@@ -6,6 +6,7 @@ mod blob;
 mod buffer;
 mod camera;
 mod consts;
+mod dot;
 mod gpu_debugger;
 mod gpu_profiler;
 mod gui;
@@ -19,11 +20,12 @@ mod texture;
 mod viewport;
 mod vulkan;
 
+pub extern crate tracing;
+
 pub mod compute_tex_macro;
 
 pub use nalgebra as na;
 pub use snoozy::*;
-use tokio::runtime::Runtime;
 
 pub use self::blob::*;
 pub use self::buffer::*;
@@ -37,6 +39,9 @@ pub use self::texture::*;
 pub use self::viewport::*;
 pub use self::vulkan::VkKitchenSink;
 pub use ash::{vk, vk::Format};
+
+use imgui::im_str;
+use tokio::runtime::Runtime;
 
 pub type Point2 = na::Point2<f32>;
 pub type Vector2 = na::Vector2<f32>;
@@ -73,52 +78,6 @@ use gpu_profiler::GpuProfilerStats;
 use gui::ImGuiBackend;
 use std::str::FromStr;
 
-/*extern "system" fn gl_debug_message(
-    _source: u32,
-    type_: u32,
-    id: u32,
-    severity: u32,
-    _len: i32,
-    message: *const i8,
-    _param: *mut std::ffi::c_void,
-) {
-    unsafe {
-        let s = std::ffi::CStr::from_ptr(message);
-
-        let is_ignored_id = match id {
-            131216 => true, // Program/shader state info: GLSL shader * failed to compile. WAT.
-            131185 => true, // Buffer detailed info: (...) will use (...) memory as the source for buffer object operations.
-            _ => false,
-        };
-
-        if !is_ignored_id {
-            let is_important_type = match type_ {
-                gl::DEBUG_TYPE_ERROR
-                | gl::DEBUG_TYPE_UNDEFINED_BEHAVIOR
-                | gl::DEBUG_TYPE_DEPRECATED_BEHAVIOR
-                | gl::DEBUG_TYPE_PORTABILITY => true,
-                _ => false,
-            };
-
-            if !is_important_type {
-                println!("GL debug({}): {}\n", id, s.to_string_lossy());
-            } else {
-                panic!(
-                    "OpenGL Debug message ({}, {:x}, {:x}): {}",
-                    id,
-                    type_,
-                    severity,
-                    s.to_string_lossy()
-                );
-            }
-        }
-    }
-}
-
-struct GlState {
-    vao: u32,
-}*/
-
 pub struct Rendertoy {
     rt: Runtime,
     window: winit::Window,
@@ -136,6 +95,7 @@ pub struct Rendertoy {
     imgui: imgui::Context,
     imgui_backend: ImGuiBackend,
     gpu_profiler_stats: Option<GpuProfilerStats>,
+    dump_next_frame_dot_graph: bool,
 }
 
 #[derive(Clone)]
@@ -221,6 +181,8 @@ impl RendertoyConfig {
 impl Rendertoy {
     pub fn new_with_config(cfg: RendertoyConfig) -> Rendertoy {
         let rt = Runtime::new().unwrap();
+        tracing_subscriber::fmt::init();
+
         let events_loop = winit::EventsLoop::new();
 
         let window = winit::WindowBuilder::new()
@@ -239,72 +201,6 @@ impl Rendertoy {
         let mut imgui = imgui::Context::create();
         let imgui_backend = ImGuiBackend::new(&window, &mut imgui);
 
-        /*let windowed_context = winit::ContextBuilder::new()
-            .with_vsync(cfg.vsync)
-            .with_gl_debug_flag(cfg.graphics_debugging)
-            .with_gl_profile(if cfg.core_gl {
-                winit::GlProfile::Core
-            } else {
-                winit::GlProfile::Compatibility
-            })
-            .with_gl(winit::GlRequest::Specific(winit::Api::OpenGl, (4, 3)))
-            .build_windowed(wb, &events_loop)
-            .unwrap();
-
-        let windowed_context = unsafe { windowed_context.make_current().unwrap() };*/
-        //let gl = gl::Gl::load_with(|symbol| windowed_context.get_proc_address(symbol) as *const _);
-        //let mut vao: u32 = 0;
-
-        /*unsafe {
-            use std::ffi::CStr;
-            println!(
-                "GL_VENDOR: {:?}",
-                CStr::from_ptr(gl.GetString(gl::VENDOR) as *const i8)
-            );
-            println!(
-                "GL_RENDERER: {:?}",
-                CStr::from_ptr(gl.GetString(gl::RENDERER) as *const i8)
-            );
-
-            gl.DebugMessageCallback(Some(gl_debug_message), std::ptr::null_mut());
-
-            // Disable everything by default
-            gl.DebugMessageControl(
-                gl::DONT_CARE,
-                gl::DONT_CARE,
-                gl::DONT_CARE,
-                0,
-                std::ptr::null_mut(),
-                0,
-            );
-
-            gl.DebugMessageControl(
-                gl::DONT_CARE,
-                gl::DONT_CARE,
-                gl::DONT_CARE,
-                0,
-                std::ptr::null_mut(),
-                1,
-            );
-
-            gl.DebugMessageControl(
-                gl::DEBUG_SOURCE_SHADER_COMPILER,
-                gl::DONT_CARE,
-                gl::DONT_CARE,
-                0,
-                std::ptr::null_mut(),
-                0,
-            );
-
-            gl.Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);
-            gl.Enable(gl::FRAMEBUFFER_SRGB);
-
-            gl.GenVertexArrays(1, &mut vao);
-        }*/
-
-        //set_global_gl_context(gfx, unsafe { windowed_context.make_not_current().unwrap() });
-        //set_global_gl_context(gfx, unsafe { windowed_context.treat_as_not_current() });
-
         Rendertoy {
             rt,
             window,
@@ -322,6 +218,7 @@ impl Rendertoy {
             imgui,
             imgui_backend,
             gpu_profiler_stats: None,
+            dump_next_frame_dot_graph: false,
         }
     }
 
@@ -475,7 +372,7 @@ impl Rendertoy {
         self.frame_time_display_cooldown += self.dt;
         if self.frame_time_display_cooldown > 1.0 {
             self.frame_time_display_cooldown = 0.0;
-            println!(
+            tracing::info!(
                 "frame time: {:.2}ms ({:.2} fps)",
                 self.average_frame_time * 1000.0,
                 1.0 / self.average_frame_time
@@ -491,11 +388,30 @@ impl Rendertoy {
 
         let tex = callback(&state);
 
-        let final_texture = self.rt.block_on(async move {
-            let snapshot = get_snapshot();
-            let final_texture: Texture = (*snapshot.get(tex).await).clone();
-            final_texture.view
-        });
+        let final_texture = {
+            let tex = tex.clone();
+            self.rt.block_on(async move {
+                let snapshot = get_snapshot();
+                let final_texture: Texture = (*snapshot.get(tex).await).clone();
+                final_texture.view
+            })
+        };
+
+        if self.dump_next_frame_dot_graph {
+            self.dump_next_frame_dot_graph = false;
+            let dot = generate_dot_graph_from_snoozy_ref(
+                tex.into(),
+                Some(&["compute_tex", "raster_tex"]),
+                &[],
+                Some("rankdir = BT"),
+            );
+
+            use std::fs::File;
+            use std::io::prelude::*;
+
+            let mut file = File::create("frame.dot").expect("File::create");
+            file.write_all(dot.as_bytes()).expect("file.write_all");
+        }
 
         //with_gl(|gl| unsafe
         let debugged_texture = {
@@ -540,7 +456,11 @@ impl Rendertoy {
         currently_debugged_texture: &Option<String>,
     ) -> Option<String> {
         let mut selected_name = None;
-        ui.text(format!("Frame time: {:.2}ms ({:.1} fps)", 1000.0 * average_frame_time, 1.0 / average_frame_time));
+        ui.text(format!(
+            "Frame time: {:.2}ms ({:.1} fps)",
+            1000.0 * average_frame_time,
+            1.0 / average_frame_time
+        ));
         //let mut total_time_ms = 0.0;
 
         for (name, _scope) in stats.scopes.iter() {
@@ -772,9 +692,26 @@ impl Rendertoy {
                         self.imgui_backend
                             .prepare_frame(&self.window, &mut self.imgui, self.dt);
                     {
-                        //ui.separator();
-
                         if self.show_gui {
+                            self.dump_next_frame_dot_graph =
+                                ui.button(im_str!("Save frame.dot dump"), [0.0, 0.0]);
+                            ui.spacing();
+
+                            if ui
+                                .collapsing_header(im_str!("GPU passes"))
+                                .default_open(true)
+                                .build()
+                            {
+                                if let Some(ref stats) = self.gpu_profiler_stats {
+                                    self.selected_debug_name = Self::draw_profiling_stats(
+                                        &ui,
+                                        self.average_frame_time,
+                                        stats,
+                                        &currently_debugged_texture,
+                                    );
+                                }
+                            }
+
                             /*self.draw_warnings(
                                 gl,
                                 windowed_context,
@@ -782,14 +719,6 @@ impl Rendertoy {
                                 &font,
                                 RTOY_WARNINGS.lock().unwrap().drain(..),
                             );*/
-                            if let Some(ref stats) = self.gpu_profiler_stats {
-                                self.selected_debug_name = Self::draw_profiling_stats(
-                                    &ui,
-                                    self.average_frame_time,
-                                    stats,
-                                    &currently_debugged_texture,
-                                );
-                            }
                         }
                     }
                     let gui_texture_view = self.imgui_backend.render(&self.window, ui, cb);
@@ -1046,4 +975,68 @@ fn create_present_compute_pipeline(
             pipeline,
         })
     }
+}
+
+fn generate_dot_graph_from_snoozy_ref(
+    root: OpaqueSnoozyRef,
+    ops_to_include: Option<&[&'static str]>,
+    ops_to_skip: &[&'static str],
+    dot_graph_attribs: Option<&'static str>,
+) -> String {
+    let should_include_op = |op: &OpaqueSnoozyRef| {
+        let op_name = op.recipe_info.read().unwrap().recipe_meta.op_name;
+
+        !ops_to_skip.contains(&op_name)
+            && ops_to_include
+                .map(|names| names.contains(&op_name))
+                .unwrap_or(true)
+    };
+
+    let get_node_name = |r: &OpaqueSnoozyRef| -> String {
+        let info = r.recipe_info.read().unwrap();
+        if let Some(ref build_record) = info.build_record {
+            if let Some(ref debug_name) = build_record.last_valid_build_result.debug_info.debug_name
+            {
+                return debug_name.clone();
+            }
+        }
+
+        format!("{}", info.recipe_meta.op_name)
+    };
+
+    use petgraph::*;
+    use std::collections::HashMap;
+
+    let mut node_indices: HashMap<usize, _> = HashMap::new();
+    let root_name = get_node_name(&root);
+
+    let mut graph = Graph::<String, String>::new();
+    let root_idx = graph.add_node(root_name);
+    node_indices.insert(root.get_transient_op_id(), root_idx);
+
+    let mut stack: Vec<(OpaqueSnoozyRef, _)> = Vec::new();
+    stack.push((root, root_idx));
+
+    while let Some((r, r_idx)) = stack.pop() {
+        let info = r.recipe_info.read().unwrap();
+
+        if let Some(build_record) = info.build_record.as_ref() {
+            for dep in build_record.dependencies.iter() {
+                let dep_op_id = dep.get_transient_op_id();
+
+                if let Some(dep_idx) = node_indices.get(&dep_op_id) {
+                    graph.extend_with_edges(&[(r_idx, *dep_idx)]);
+                } else if should_include_op(&dep) {
+                    let dep_name = get_node_name(dep);
+                    let dep_idx = graph.add_node(dep_name.clone());
+                    node_indices.insert(dep_op_id, dep_idx);
+                    graph.extend_with_edges(&[(r_idx, dep_idx)]);
+                    stack.push((dep.clone(), dep_idx));
+                }
+            }
+        }
+    }
+
+    let dot = crate::dot::Dot::new(&graph, dot_graph_attribs);
+    format!("{}", dot)
 }

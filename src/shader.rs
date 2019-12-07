@@ -566,12 +566,10 @@ fn create_compute_pipeline(
             .stage(stage_create_info.build())
             .layout(pipeline_layout);
 
-        let t0 = std::time::Instant::now();
         // TODO: pipeline cache
         let pipeline = vk_device
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
             .expect("pipeline")[0];
-        println!("create_compute_pipelines took {:?}", t0.elapsed());
 
         Ok(ComputePipeline {
             pipeline_layout,
@@ -1374,14 +1372,13 @@ pub async fn compute_tex(
 ) -> Result<Texture> {
     let output_tex = crate::backend::texture::create_texture(*key);
     let cs = ctx.get(cs).await?;
+    ctx.set_debug_name(&cs.name);
 
     let mut uniforms = resolve(ctx, uniforms.clone()).await?;
     uniforms.push(ResolvedShaderUniformHolder {
         name: "outputTex".to_owned(),
         value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
     });
-
-    //dbg!(&cs.name);
 
     let device = vk_device();
     let vk_frame = unsafe { vk_frame() };
