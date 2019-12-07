@@ -1,7 +1,7 @@
 use crate::blob::*;
 use crate::buffer::Buffer;
 use crate::gpu_debugger;
-//use crate::gpu_profiler;
+use crate::gpu_profiler;
 use crate::texture::{Texture, TextureKey};
 use crate::vulkan::*;
 use ash::version::DeviceV1_0;
@@ -1460,12 +1460,14 @@ pub async fn compute_tex(
             &ds_update_result.dynamic_offsets,
         );
 
-        device.cmd_dispatch(
-            cb,
-            (key.width + cs.local_size.0 - 1) / cs.local_size.0,
-            (key.height + cs.local_size.1 - 1) / cs.local_size.1,
-            1,
-        );
+        gpu_profiler::profile(&cs.name, || {
+            device.cmd_dispatch(
+                cb,
+                (key.width + cs.local_size.0 - 1) / cs.local_size.0,
+                (key.height + cs.local_size.1 - 1) / cs.local_size.1,
+                1,
+            )
+        });
 
         vk_all().record_image_barrier(
             cb,

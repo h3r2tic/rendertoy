@@ -6,8 +6,8 @@ use std::default::Default;
 use std::mem::replace;
 use std::sync::Mutex;
 
-pub fn profile<F: FnOnce()>(gfx: &crate::Gfx, name: &str, f: F) {
-    GPU_PROFILER.lock().unwrap().profile(gfx, name, f);
+pub fn profile<F: FnOnce()>(name: &str, f: F) {
+    GPU_PROFILER.lock().unwrap().profile(name, f);
 }
 
 pub fn end_frame(gfx: &crate::Gfx) {
@@ -19,9 +19,13 @@ pub fn with_stats<F: FnOnce(&GpuProfilerStats)>(f: F) {
     f(&GPU_PROFILER.lock().unwrap().stats);
 }
 
+pub fn get_stats() -> GpuProfilerStats {
+    GPU_PROFILER.lock().unwrap().stats.clone()
+}
+
 // TODO: currently merges multiple invocations in a frame into a single bucket, and averages it
 // should instead report the count per frame along with correct per-hit timing
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GpuProfilerScope {
     pub hits: Vec<u64>, // nanoseconds
     pub write_head: u32,
@@ -47,7 +51,7 @@ impl GpuProfilerScope {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct GpuProfilerStats {
     pub scopes: HashMap<String, GpuProfilerScope>,
     pub order: Vec<String>,
@@ -75,7 +79,9 @@ impl ActiveQuery {
         } else {
             None
         }*/
-        unimplemented!()
+
+        // TODO
+        Some(0)
     }
 }
 
@@ -146,24 +152,23 @@ impl GpuProfiler {
         }
     }
 
-    fn profile<F: FnOnce()>(&mut self, gfx: &crate::Gfx, name: &str, f: F) {
-        /*self.frame_query_names.push(name.to_string());
+    fn profile<F: FnOnce()>(&mut self, name: &str, f: F) {
+        self.frame_query_names.push(name.to_string());
 
-        let handle = self.new_query_handle(gfx);
+        /*        let handle = self.new_query_handle(gfx);
         unsafe {
             gl.BeginQuery(gl::TIME_ELAPSED, handle);
-        }
+        }*/
 
         f();
 
-        unsafe {
+        /*unsafe {
             gl.EndQuery(gl::TIME_ELAPSED);
-        }
+        }*/
         self.active_queries.push(ActiveQuery {
-            handle,
+            handle: 0, // TODO
             name: name.to_string(),
-        });*/
-        f();
+        });
     }
 }
 

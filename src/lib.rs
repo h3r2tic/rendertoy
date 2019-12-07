@@ -69,6 +69,7 @@ extern crate abomonation_derive;
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 
 use clap::ArgMatches;
+use gpu_profiler::GpuProfilerStats;
 use gui::ImGuiBackend;
 use std::str::FromStr;
 
@@ -134,6 +135,7 @@ pub struct Rendertoy {
     frame_time_display_cooldown: f32,
     imgui: imgui::Context,
     imgui_backend: ImGuiBackend,
+    gpu_profiler_stats: Option<GpuProfilerStats>,
 }
 
 #[derive(Clone)]
@@ -174,7 +176,6 @@ pub struct RendertoyConfig {
     pub height: u32,
     pub vsync: bool,
     pub graphics_debugging: bool,
-    pub core_gl: bool,
 }
 
 fn parse_resolution(s: &str) -> Result<(u32, u32)> {
@@ -207,14 +208,12 @@ impl RendertoyConfig {
             .unwrap_or(true);
 
         let graphics_debugging = !matches.is_present("ndebug");
-        let core_gl = matches.is_present("core-gl");
 
         RendertoyConfig {
             width,
             height,
             vsync,
             graphics_debugging,
-            core_gl,
         }
     }
 }
@@ -322,6 +321,7 @@ impl Rendertoy {
             frame_time_display_cooldown: 0.0,
             imgui,
             imgui_backend,
+            gpu_profiler_stats: None,
         }
     }
 
@@ -443,13 +443,13 @@ impl Rendertoy {
         //)
     }
 
-    fn get_currently_debugged_texture(&self) -> Option<&String> {
+    fn get_currently_debugged_texture(&self) -> Option<String> {
         self.selected_debug_name
-            .as_ref()
-            .or(self.locked_debug_name.as_ref())
+            .clone()
+            .or(self.locked_debug_name.clone())
     }
 
-    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F) -> Texture
+    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F) -> vk::ImageView
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
@@ -494,11 +494,11 @@ impl Rendertoy {
         let final_texture = self.rt.block_on(async move {
             let snapshot = get_snapshot();
             let final_texture: Texture = (*snapshot.get(tex).await).clone();
-            final_texture
+            final_texture.view
         });
 
         //with_gl(|gl| unsafe
-        {
+        let debugged_texture = {
             /*gl.ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
             gl.BindVertexArray(self.gl_state.vao);
             gl.Enable(gl::CULL_FACE);
@@ -514,8 +514,9 @@ impl Rendertoy {
                 .and_then(|name| data.textures.get(name).cloned());*/
                 debugged_texture = self
                     .get_currently_debugged_texture()
-                    .and_then(|name| data.textures.get(name).cloned());
+                    .and_then(|name| data.textures.get(&name).cloned());
             });
+            debugged_texture
 
             // TODO
             //draw_fullscreen_texture(final_texture, state.window_size_pixels);
@@ -526,134 +527,76 @@ impl Rendertoy {
                 debugged_texture.unwrap_or(final_texture.view),
                 state.window_size_pixels,
             );*/
-        }
+        };
         //);
         //
-        final_texture
+        debugged_texture.unwrap_or(final_texture)
     }
 
-    /*fn draw_profiling_stats(
-        &mut self,
-        gfx: &crate::Gfx,
-        windowed_context: &GlutinCurrentContext,
-        vg_context: &nanovg::Context,
-        font: &Font,
+    fn draw_profiling_stats(
+        ui: &imgui::Ui,
+        average_frame_time: f32,
+        stats: &GpuProfilerStats,
+        currently_debugged_texture: &Option<String>,
     ) -> Option<String> {
-        let size = windowed_context
-            .window()
-            .get_inner_size()
-            .map(|s| s.to_physical(windowed_context.window().get_hidpi_factor()))
-            .unwrap_or(winit::dpi::PhysicalSize::new(1.0, 1.0));
+        let mut selected_name = None;
+        let fps = format!("FPS: {:.1}", 1.0 / average_frame_time);
+        ui.text(fps);
+        //let mut total_time_ms = 0.0;
 
-        let (width, height) = (size.width as i32, size.height as i32);
+        for (name, scope) in stats.scopes.iter() {
+            let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
 
-        unsafe {
-            gl.Viewport(0, 0, width, height);
+            let style = if Some(name) == currently_debugged_texture.as_ref() {
+                Some(ui.push_style_color(imgui::StyleColor::Text, [1.0, 0.25, 0.0625, 1.0]))
+            } else {
+                None
+            };
+
+            ui.text(text);
+
+            if let Some(style) = style {
+                style.pop(ui);
+            }
+
+            let hit = ui.is_item_hovered();
+            if hit {
+                selected_name = Some(name.to_owned());
+            }
         }
 
-        let (width, height) = (width as f32, height as f32);
+        /*for name in stats.order.iter() {
+            if let Some(scope) = stats.scopes.get(name) {
+                let average_duration_millis = scope.average_duration_millis();
+                let text = format!("{}: {:.3}ms", name, average_duration_millis);
+                total_time_ms += average_duration_millis;
 
-        let mut selected_name = None;
-
-        vg_context.frame(
-            (width, height),
-            windowed_context.window().get_hidpi_factor() as f32,
-            |frame| {
-                let mut text_options = TextOptions {
-                    size: 24.0,
-                    color: Color::from_rgb(255, 255, 255),
-                    align: Alignment::new().bottom().left(),
-                    transform: None,
-                    ..Default::default()
+                /*let color = if Some(name) == self.get_currently_debugged_texture() {
+                    Color::from_rgb(255, 64, 16)
+                } else {
+                    Color::from_rgb(255, 255, 255)
                 };
+                text_options.color = color;*/
 
-                let mut text_shadow_options = text_options.clone();
-                text_shadow_options.color = Color::from_rgb(0, 0, 0);
-                text_shadow_options.blur = 1.0;
+                ui.text(text);
 
-                let fps = format!("FPS: {:.1}", 1.0 / self.average_frame_time);
+                if ui.is_item_hovered() {
+                    selected_name = Some(name.to_owned());
+                }
 
-                let metrics = frame.text_metrics(*font, text_options);
-                let mut y = 10.0 + metrics.line_height;
-                frame.text(*font, (10.0 + 1.0, y + 1.0), &fps, text_shadow_options);
-                frame.text(*font, (10.0, y), &fps, text_options);
-                y += metrics.line_height * 2.0;
+                /*if (self.mouse_state.button_mask & 1) != 0 {
+                    self.locked_debug_name = selected_name.clone();
+                }*/
+            }
+        }*/
 
-                let mut total_time_ms = 0.0;
-
-                gpu_profiler::with_stats(|stats| {
-                    /*for (name, scope) in stats.scopes.iter() {
-                        let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
-                        let (uw, _) = frame.text_bounds(*font, (0.0, 0.0), &text, text_options);
-
-                        // self.mouse_state.pos.y
-                        let hit = self.mouse_state.pos.y >= (y - metrics.line_height)
-                            && self.mouse_state.pos.y < y
-                            && self.mouse_state.pos.x < uw + 10.0;
-                        if hit {
-                            selected_name = Some(name.to_owned());
-                        }
-
-                        let color = if hit {
-                            Color::from_rgb(255, 64, 16)
-                        } else {
-                            Color::from_rgb(255, 255, 255)
-                        };
-                        text_options.color = color;
-
-                        frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
-                        frame.text(*font, (10.0, y), &text, text_options);
-                        y += metrics.line_height;
-                    }*/
-
-                    for name in stats.order.iter() {
-                        if let Some(scope) = stats.scopes.get(name) {
-                            let average_duration_millis = scope.average_duration_millis();
-                            let text = format!("{}: {:.3}ms", name, average_duration_millis);
-                            total_time_ms += average_duration_millis;
-
-                            let (uw, _) = frame.text_bounds(*font, (0.0, 0.0), &text, text_options);
-
-                            // self.mouse_state.pos.y
-                            let hit = self.mouse_state.pos.y >= (y - metrics.line_height)
-                                && self.mouse_state.pos.y < y
-                                && self.mouse_state.pos.x < uw + 10.0;
-                            if hit {
-                                selected_name = Some(name.to_owned());
-                            }
-
-                            if (self.mouse_state.button_mask & 1) != 0 {
-                                self.locked_debug_name = selected_name.clone();
-                            }
-
-                            let color = if Some(name) == self.get_currently_debugged_texture() {
-                                Color::from_rgb(255, 64, 16)
-                            } else {
-                                Color::from_rgb(255, 255, 255)
-                            };
-                            text_options.color = color;
-
-                            frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
-                            frame.text(*font, (10.0, y), &text, text_options);
-                            y += metrics.line_height;
-                        }
-                    }
-                });
-
-                let text = format!("TOTAL: {:.3}ms", total_time_ms);
-
-                let color = Color::from_rgb(255, 255, 255);
-                text_options.color = color;
-
-                frame.text(*font, (10.0 + 1.0, y + 1.0), &text, text_shadow_options);
-                frame.text(*font, (10.0, y), &text, text_options);
-            },
-        );
+        //let text = format!("TOTAL: {:.3}ms", total_time_ms);
+        //ui.text(text);
 
         selected_name
     }
 
-    fn draw_warnings(
+    /*fn draw_warnings(
         &self,
         gfx: &crate::Gfx,
         windowed_context: &GlutinCurrentContext,
@@ -824,9 +767,31 @@ impl Rendertoy {
 
                     let final_texture = self.draw_with_frame_snapshot(&mut callback);
 
+                    let currently_debugged_texture = self.get_currently_debugged_texture().clone();
                     let ui =
                         self.imgui_backend
                             .prepare_frame(&self.window, &mut self.imgui, self.dt);
+                    {
+                        //ui.separator();
+
+                        if self.show_gui {
+                            /*self.draw_warnings(
+                                gl,
+                                windowed_context,
+                                &vg_context,
+                                &font,
+                                RTOY_WARNINGS.lock().unwrap().drain(..),
+                            );*/
+                            if let Some(ref stats) = self.gpu_profiler_stats {
+                                self.selected_debug_name = Self::draw_profiling_stats(
+                                    &ui,
+                                    self.average_frame_time,
+                                    stats,
+                                    &currently_debugged_texture,
+                                );
+                            }
+                        }
+                    }
                     let gui_texture_view = self.imgui_backend.render(&self.window, ui, cb);
 
                     unsafe {
@@ -839,7 +804,7 @@ impl Rendertoy {
                                     .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                                     .image_info(&[vk::DescriptorImageInfo::builder()
                                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                        .image_view(final_texture.view)
+                                        .image_view(final_texture)
                                         .build()])
                                     .build(),
                                 vk::WriteDescriptorSet::builder()
@@ -926,17 +891,7 @@ impl Rendertoy {
                 gpu_profiler::end_frame(&gfx);
                 gpu_debugger::end_frame();
 
-                /*if self.show_gui && !self.cfg.core_gl {
-                    self.draw_warnings(
-                        gl,
-                        windowed_context,
-                        &vg_context,
-                        &font,
-                        RTOY_WARNINGS.lock().unwrap().drain(..),
-                    );
-                    self.selected_debug_name =
-                        self.draw_profiling_stats(gfx, windowed_context, &vg_context, &font);
-                }*/
+                self.gpu_profiler_stats = Some(gpu_profiler::get_stats());
             }
             //);
 
