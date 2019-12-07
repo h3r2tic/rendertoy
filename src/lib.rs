@@ -36,7 +36,6 @@ pub use self::shader::*;
 pub use self::texture::*;
 pub use self::viewport::*;
 pub use self::vulkan::VkKitchenSink;
-
 pub use ash::{vk, vk::Format};
 
 pub type Point2 = na::Point2<f32>;
@@ -69,10 +68,8 @@ extern crate abomonation_derive;
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 
-use imgui::Context as GuiContext;
-use imgui_winit_support::{HiDpiMode, WinitPlatform};
-
 use clap::ArgMatches;
+use gui::ImGuiBackend;
 use std::str::FromStr;
 
 /*extern "system" fn gl_debug_message(
@@ -135,13 +132,8 @@ pub struct Rendertoy {
     show_gui: bool,
     average_frame_time: f32,
     frame_time_display_cooldown: f32,
-
-    imgui: GuiContext,
-    imgui_platform: WinitPlatform,
-    imgui_renderer: ash_imgui::Renderer,
-    imgui_render_pass: vk::RenderPass,
-    imgui_framebuffer: vk::Framebuffer,
-    imgui_texture: Texture,
+    imgui: imgui::Context,
+    imgui_backend: ImGuiBackend,
 }
 
 #[derive(Clone)]
@@ -245,51 +237,8 @@ impl Rendertoy {
             VkKitchenSink::new(&window, cfg.graphics_debugging).unwrap(),
         );
 
-        let mut imgui = GuiContext::create();
-        crate::gui::setup_imgui_style(&mut imgui);
-
-        let mut imgui_platform = WinitPlatform::init(&mut imgui);
-        imgui_platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
-
-        {
-            use imgui::{FontConfig, FontGlyphRanges, FontSource};
-
-            let hidpi_factor = imgui_platform.hidpi_factor();
-            let font_size = (13.0 * hidpi_factor) as f32;
-            imgui.fonts().add_font(&[
-                FontSource::DefaultFontData {
-                    config: Some(FontConfig {
-                        size_pixels: font_size,
-                        ..FontConfig::default()
-                    }),
-                },
-                FontSource::TtfData {
-                    data: include_bytes!("../assets/fonts/Roboto-Regular.ttf"),
-                    size_pixels: font_size,
-                    config: Some(FontConfig {
-                        rasterizer_multiply: 1.75,
-                        glyph_ranges: FontGlyphRanges::japanese(),
-                        ..FontConfig::default()
-                    }),
-                },
-            ]);
-
-            imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
-        }
-
-        let imgui_renderer = {
-            let vk = unsafe { vulkan::vk_all() };
-            ash_imgui::Renderer::new(
-                &vk.device,
-                &vk.device_properties,
-                &vk.device_memory_properties,
-                &mut imgui,
-            )
-        };
-
-        let imgui_render_pass = crate::gui::create_imgui_render_pass(vulkan::vk_device());
-        let (imgui_framebuffer, imgui_texture) =
-            crate::gui::create_imgui_framebuffer(vulkan::vk_device(), imgui_render_pass);
+        let mut imgui = imgui::Context::create();
+        let imgui_backend = ImGuiBackend::new(&window, &mut imgui);
 
         /*let windowed_context = winit::ContextBuilder::new()
             .with_vsync(cfg.vsync)
@@ -372,11 +321,7 @@ impl Rendertoy {
             average_frame_time: 0.0,
             frame_time_display_cooldown: 0.0,
             imgui,
-            imgui_platform,
-            imgui_renderer,
-            imgui_render_pass,
-            imgui_framebuffer,
-            imgui_texture,
+            imgui_backend,
         }
     }
 
@@ -422,12 +367,12 @@ impl Rendertoy {
     fn next_frame(&mut self) -> bool {
         let mut events = Vec::new();
         {
-            let imgui_platform = &mut self.imgui_platform;
+            let imgui_backend = &mut self.imgui_backend;
             let imgui = &mut self.imgui;
             let window = &self.window;
 
             self.events_loop.poll_events(|event| {
-                imgui_platform.handle_event(imgui.io_mut(), window, &event);
+                imgui_backend.handle_event(window, imgui, &event);
                 events.push(event);
             });
         }
@@ -879,83 +824,10 @@ impl Rendertoy {
 
                     let final_texture = self.draw_with_frame_snapshot(&mut callback);
 
-                    self.imgui_platform
-                        .prepare_frame(self.imgui.io_mut(), &self.window)
-                        .expect("Failed to prepare frame");
-                    self.imgui.io_mut().delta_time = self.dt;
-                    let ui = self.imgui.frame();
-                    {
-                        use imgui::im_str;
-
-                        ui.text(im_str!("Hello world!"));
-                        ui.text(im_str!("こんにちは世界！"));
-                        ui.text(im_str!("This...is...imgui-rs!"));
-                        ui.separator();
-                        let mouse_pos = ui.io().mouse_pos;
-                        ui.text(format!(
-                            "Mouse Position: ({:.1},{:.1})",
-                            mouse_pos[0], mouse_pos[1]
-                        ));
-                    }
-                    self.imgui_platform.prepare_render(&ui, &self.window);
-                    let draw_data = ui.render();
-
-                    if !self.imgui_renderer.has_pipeline() {
-                        self.imgui_renderer
-                            .create_pipeline(vk_device(), self.imgui_render_pass);
-                    }
-
-                    unsafe { vk_all() }.record_image_barrier(
-                        cb,
-                        ImageBarrier::new(
-                            self.imgui_texture.image,
-                            vk_sync::AccessType::Nothing,
-                            vk_sync::AccessType::ColorAttachmentWrite,
-                        )
-                        .with_discard(true),
-                    );
-
-                    self.imgui_renderer.begin_frame(vk_device(), cb);
-
-                    {
-                        let clear_values = [vk::ClearValue {
-                            color: vk::ClearColorValue {
-                                float32: [0.0, 0.0, 0.0, 0.0],
-                            },
-                        }];
-
-                        let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
-                            .render_pass(self.imgui_render_pass)
-                            .framebuffer(self.imgui_framebuffer)
-                            .render_area(vk::Rect2D {
-                                offset: vk::Offset2D { x: 0, y: 0 },
-                                extent: unsafe { vk_all() }.surface_resolution,
-                            })
-                            .clear_values(&clear_values);
-
-                        unsafe {
-                            vk_device().cmd_begin_render_pass(
-                                cb,
-                                &render_pass_begin_info,
-                                vk::SubpassContents::INLINE,
-                            );
-                        }
-                    }
-
-                    self.imgui_renderer.render(&draw_data, vk_device(), cb);
-
-                    unsafe {
-                        vk_device().cmd_end_render_pass(cb);
-                    }
-
-                    unsafe { vk_all() }.record_image_barrier(
-                        cb,
-                        ImageBarrier::new(
-                            self.imgui_texture.image,
-                            vk_sync::AccessType::ColorAttachmentWrite,
-                            vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
-                        ),
-                    );
+                    let ui =
+                        self.imgui_backend
+                            .prepare_frame(&self.window, &mut self.imgui, self.dt);
+                    let gui_texture_view = self.imgui_backend.render(&self.window, ui, cb);
 
                     unsafe {
                         vk.device.update_descriptor_sets(
@@ -977,7 +849,7 @@ impl Rendertoy {
                                     .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                                     .image_info(&[vk::DescriptorImageInfo::builder()
                                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                        .image_view(self.imgui_texture.view)
+                                        .image_view(gui_texture_view)
                                         .build()])
                                     .build(),
                                 vk::WriteDescriptorSet::builder()

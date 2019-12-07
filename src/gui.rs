@@ -2,6 +2,182 @@ use crate::texture::{Texture, TextureKey};
 use ash::version::DeviceV1_0;
 use ash::vk;
 
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
+
+pub struct ImGuiBackend {
+    imgui_platform: WinitPlatform,
+    imgui_renderer: ash_imgui::Renderer,
+    imgui_render_pass: vk::RenderPass,
+    imgui_framebuffer: vk::Framebuffer,
+    imgui_texture: Texture,
+}
+
+impl ImGuiBackend {
+    pub fn new(window: &winit::Window, imgui: &mut imgui::Context) -> Self {
+        use crate::vulkan::*;
+        crate::gui::setup_imgui_style(imgui);
+
+        let mut imgui_platform = WinitPlatform::init(imgui);
+        imgui_platform.attach_window(imgui.io_mut(), window, HiDpiMode::Default);
+
+        {
+            use imgui::{FontConfig, FontGlyphRanges, FontSource};
+
+            let hidpi_factor = imgui_platform.hidpi_factor();
+            let font_size = (13.0 * hidpi_factor) as f32;
+            imgui.fonts().add_font(&[
+                FontSource::DefaultFontData {
+                    config: Some(FontConfig {
+                        size_pixels: font_size,
+                        ..FontConfig::default()
+                    }),
+                },
+                FontSource::TtfData {
+                    data: include_bytes!("../assets/fonts/Roboto-Regular.ttf"),
+                    size_pixels: font_size,
+                    config: Some(FontConfig {
+                        rasterizer_multiply: 1.75,
+                        glyph_ranges: FontGlyphRanges::japanese(),
+                        ..FontConfig::default()
+                    }),
+                },
+            ]);
+
+            imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
+        }
+
+        let imgui_renderer = {
+            let vk = unsafe { vk_all() };
+            ash_imgui::Renderer::new(
+                &vk.device,
+                &vk.device_properties,
+                &vk.device_memory_properties,
+                imgui,
+            )
+        };
+
+        let imgui_render_pass = crate::gui::create_imgui_render_pass(vk_device());
+        let (imgui_framebuffer, imgui_texture) =
+            crate::gui::create_imgui_framebuffer(vk_device(), imgui_render_pass);
+
+        Self {
+            imgui_platform,
+            imgui_renderer,
+            imgui_render_pass,
+            imgui_framebuffer,
+            imgui_texture,
+        }
+    }
+
+    pub fn handle_event(
+        &mut self,
+        window: &winit::Window,
+        imgui: &mut imgui::Context,
+        event: &winit::Event,
+    ) {
+        self.imgui_platform
+            .handle_event(imgui.io_mut(), window, event);
+    }
+
+    pub fn prepare_frame<'a>(
+        &mut self,
+        window: &winit::Window,
+        imgui: &'a mut imgui::Context,
+        dt: f32,
+    ) -> imgui::Ui<'a> {
+        self.imgui_platform
+            .prepare_frame(imgui.io_mut(), window)
+            .expect("Failed to prepare frame");
+        imgui.io_mut().delta_time = dt;
+        let ui = imgui.frame();
+        {
+            use imgui::im_str;
+
+            ui.text(im_str!("Hello world!"));
+            ui.text(im_str!("こんにちは世界！"));
+            ui.text(im_str!("This...is...imgui-rs!"));
+            ui.separator();
+            let mouse_pos = ui.io().mouse_pos;
+            ui.text(format!(
+                "Mouse Position: ({:.1},{:.1})",
+                mouse_pos[0], mouse_pos[1]
+            ));
+        }
+        ui
+    }
+
+    pub fn render(
+        &mut self,
+        window: &winit::Window,
+        ui: imgui::Ui,
+        cb: vk::CommandBuffer,
+    ) -> vk::ImageView {
+        use crate::vulkan::*;
+
+        self.imgui_platform.prepare_render(&ui, window);
+        let draw_data = ui.render();
+
+        if !self.imgui_renderer.has_pipeline() {
+            self.imgui_renderer
+                .create_pipeline(vk_device(), self.imgui_render_pass);
+        }
+
+        unsafe { vk_all() }.record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                self.imgui_texture.image,
+                vk_sync::AccessType::Nothing,
+                vk_sync::AccessType::ColorAttachmentWrite,
+            )
+            .with_discard(true),
+        );
+
+        self.imgui_renderer.begin_frame(vk_device(), cb);
+
+        {
+            let clear_values = [vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 0.0],
+                },
+            }];
+
+            let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
+                .render_pass(self.imgui_render_pass)
+                .framebuffer(self.imgui_framebuffer)
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: unsafe { vk_all() }.surface_resolution,
+                })
+                .clear_values(&clear_values);
+
+            unsafe {
+                vk_device().cmd_begin_render_pass(
+                    cb,
+                    &render_pass_begin_info,
+                    vk::SubpassContents::INLINE,
+                );
+            }
+        }
+
+        self.imgui_renderer.render(&draw_data, vk_device(), cb);
+
+        unsafe {
+            vk_device().cmd_end_render_pass(cb);
+        }
+
+        unsafe { vk_all() }.record_image_barrier(
+            cb,
+            ImageBarrier::new(
+                self.imgui_texture.image,
+                vk_sync::AccessType::ColorAttachmentWrite,
+                vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+            ),
+        );
+
+        self.imgui_texture.view
+    }
+}
+
 pub fn create_imgui_render_pass(device: &ash::Device) -> vk::RenderPass {
     let renderpass_attachments = [vk::AttachmentDescription {
         format: vk::Format::R8G8B8A8_UNORM,
