@@ -3,16 +3,29 @@
 
 use std::collections::HashMap;
 use std::default::Default;
-use std::mem::replace;
 use std::sync::Mutex;
 
-pub fn profile<F: FnOnce()>(name: &str, f: F) {
-    GPU_PROFILER.lock().unwrap().profile(name, f);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GpuProfilerQueryId(u64);
+
+impl Default for GpuProfilerQueryId {
+    fn default() -> Self {
+        Self(std::u64::MAX)
+    }
+}
+
+pub fn create_gpu_query(name: &str) -> GpuProfilerQueryId {
+    GPU_PROFILER.lock().unwrap().create_gpu_query(name)
+}
+
+pub fn report_durations_ticks(durations: impl Iterator<Item = (GpuProfilerQueryId, u64)>) {
+    let mut prof = GPU_PROFILER.lock().unwrap();
+    prof.report_durations_ticks(durations);
 }
 
 pub fn end_frame(gfx: &crate::Gfx) {
     let mut prof = GPU_PROFILER.lock().unwrap();
-    prof.try_finish_queries(gfx);
+    prof.end_frame(gfx);
 }
 
 pub fn with_stats<F: FnOnce(&GpuProfilerStats)>(f: F) {
@@ -23,19 +36,30 @@ pub fn get_stats() -> GpuProfilerStats {
     GPU_PROFILER.lock().unwrap().stats.clone()
 }
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct GpuProfilerScopeId(String);
+
+impl From<String> for GpuProfilerScopeId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 // TODO: currently merges multiple invocations in a frame into a single bucket, and averages it
 // should instead report the count per frame along with correct per-hit timing
 #[derive(Debug, Clone)]
 pub struct GpuProfilerScope {
+    pub name: String,
     pub hits: Vec<u64>, // nanoseconds
     pub write_head: u32,
 }
 
-impl Default for GpuProfilerScope {
-    fn default() -> GpuProfilerScope {
+impl GpuProfilerScope {
+    fn with_name(name: String) -> GpuProfilerScope {
         GpuProfilerScope {
             hits: vec![0u64; 64],
             write_head: 0,
+            name,
         }
     }
 }
@@ -53,41 +77,23 @@ impl GpuProfilerScope {
 
 #[derive(Default, Debug, Clone)]
 pub struct GpuProfilerStats {
-    pub scopes: HashMap<String, GpuProfilerScope>,
-    pub order: Vec<String>,
+    pub scopes: HashMap<GpuProfilerScopeId, GpuProfilerScope>,
+    pub order: Vec<GpuProfilerQueryId>,
 }
 
 struct ActiveQuery {
-    handle: u32,
+    id: GpuProfilerQueryId,
     name: String,
 }
 
-impl ActiveQuery {
-    fn try_get_duration_nanos(&self, gfx: &crate::Gfx) -> Option<u64> {
-        /*let mut available: i32 = 0;
-        unsafe {
-            gl.GetQueryObjectiv(self.handle, gl::QUERY_RESULT_AVAILABLE, &mut available);
-        }
-
-        if available != 0 {
-            let mut nanos = 0u64;
-            unsafe {
-                gl.GetQueryObjectui64v(self.handle, gl::QUERY_RESULT, &mut nanos);
-            }
-
-            Some(nanos)
-        } else {
-            None
-        }*/
-
-        // TODO
-        Some(0)
-    }
-}
-
 impl GpuProfilerStats {
-    fn report_duration_nanos(&mut self, name: String, duration: u64) {
-        let mut entry = self.scopes.entry(name).or_default();
+    fn report_duration_nanos(&mut self, query_id: GpuProfilerQueryId, duration: u64, name: String) {
+        let scope_id = GpuProfilerScopeId::from(name.clone());
+        let mut entry = self
+            .scopes
+            .entry(scope_id)
+            .or_insert_with(|| GpuProfilerScope::with_name(name));
+
         let len = entry.hits.len();
         entry.hits[entry.write_head as usize % len] = duration;
         entry.write_head += 1;
@@ -95,80 +101,57 @@ impl GpuProfilerStats {
 }
 
 struct GpuProfiler {
-    active_queries: Vec<ActiveQuery>,
-    inactive_queries: Vec<u32>,
-    frame_query_names: Vec<String>,
+    active_queries: HashMap<GpuProfilerQueryId, ActiveQuery>,
+    frame_query_ids: Vec<GpuProfilerQueryId>,
+    next_query_id: u64,
     stats: GpuProfilerStats,
 }
 
 impl GpuProfiler {
     pub fn new() -> Self {
         Self {
-            active_queries: Vec::new(),
-            inactive_queries: Vec::new(),
-            frame_query_names: Vec::new(),
+            active_queries: Default::default(),
+            frame_query_ids: Default::default(),
+            next_query_id: 0,
             stats: Default::default(),
         }
     }
 
-    fn new_query_handle(&mut self, gfx: &crate::Gfx) -> u32 {
-        /*if let Some(h) = self.inactive_queries.pop() {
-            h
-        } else {
-            let mut h = 0u32;
-            unsafe {
-                gl.GenQueries(1, &mut h);
-            }
-            h
-        }*/
-        unimplemented!()
+    fn report_durations_ticks(
+        &mut self,
+        durations: impl Iterator<Item = (GpuProfilerQueryId, u64)>,
+    ) {
+        let ns_per_tick = unsafe { crate::vulkan::vk_all() }
+            .device_properties
+            .limits
+            .timestamp_period;
+
+        for (query_id, duration_ticks) in durations {
+            // Remove the finished queries from the active list
+            let q = self.active_queries.remove(&query_id).unwrap();
+            let duration = (duration_ticks as f64 * ns_per_tick as f64) as u64;
+            self.stats.report_duration_nanos(query_id, duration, q.name);
+        }
     }
 
-    fn try_finish_queries(&mut self, gfx: &crate::Gfx) {
-        let finished_queries: Vec<(usize, (String, u64))> = self
-            .active_queries
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, q)| {
-                if let Some(duration) = q.try_get_duration_nanos(gfx) {
-                    Some((i, (replace(&mut q.name, String::new()), duration)))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
+    fn end_frame(&mut self, gfx: &crate::Gfx) {
         self.stats.order.clear();
-        self.stats.order.extend(self.frame_query_names.drain(..));
-
-        // Remove the finished queries from the active list
-        for (i, _) in finished_queries.iter().rev() {
-            self.inactive_queries.push(self.active_queries[*i].handle);
-            self.active_queries.swap_remove(*i);
-        }
-
-        for (_, (name, duration)) in finished_queries.into_iter() {
-            self.stats.report_duration_nanos(name, duration);
-        }
+        self.stats.order.extend(self.frame_query_ids.drain(..));
     }
 
-    fn profile<F: FnOnce()>(&mut self, name: &str, f: F) {
-        self.frame_query_names.push(name.to_string());
-
-        /*        let handle = self.new_query_handle(gfx);
-        unsafe {
-            gl.BeginQuery(gl::TIME_ELAPSED, handle);
-        }*/
-
-        f();
-
-        /*unsafe {
-            gl.EndQuery(gl::TIME_ELAPSED);
-        }*/
-        self.active_queries.push(ActiveQuery {
-            handle: 0, // TODO
-            name: name.to_string(),
-        });
+    fn create_gpu_query(&mut self, name: &str) -> GpuProfilerQueryId {
+        let id = GpuProfilerQueryId(self.next_query_id);
+        self.next_query_id += 1;
+        self.frame_query_ids.push(id);
+        self.active_queries.insert(
+            id,
+            ActiveQuery {
+                id,
+                name: name.to_string(),
+            },
+        );
+        assert!(self.active_queries.len() < 8192);
+        id
     }
 }
 

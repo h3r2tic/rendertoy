@@ -1,7 +1,6 @@
 use crate::blob::*;
 use crate::buffer::Buffer;
 use crate::gpu_debugger;
-use crate::gpu_profiler;
 use crate::texture::{Texture, TextureKey};
 use crate::vulkan::*;
 use ash::version::DeviceV1_0;
@@ -1457,14 +1456,29 @@ pub async fn compute_tex(
             &ds_update_result.dynamic_offsets,
         );
 
-        gpu_profiler::profile(&cs.name, || {
-            device.cmd_dispatch(
-                cb,
-                (key.width + cs.local_size.0 - 1) / cs.local_size.0,
-                (key.height + cs.local_size.1 - 1) / cs.local_size.1,
-                1,
-            )
-        });
+        let query_id = crate::gpu_profiler::create_gpu_query(&cs.name);
+        let vk_query_idx = vk_frame.profiler_data.get_query_id(query_id);
+
+        device.cmd_write_timestamp(
+            cb,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            vk_frame.profiler_data.query_pool,
+            vk_query_idx * 2 + 0,
+        );
+
+        device.cmd_dispatch(
+            cb,
+            (key.width + cs.local_size.0 - 1) / cs.local_size.0,
+            (key.height + cs.local_size.1 - 1) / cs.local_size.1,
+            1,
+        );
+
+        device.cmd_write_timestamp(
+            cb,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            vk_frame.profiler_data.query_pool,
+            vk_query_idx * 2 + 1,
+        );
 
         vk_all().record_image_barrier(
             cb,

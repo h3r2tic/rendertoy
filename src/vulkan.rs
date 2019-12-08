@@ -1,4 +1,5 @@
 //use ash::extensions::nv::RayTracing;
+use crate::gpu_profiler::GpuProfilerQueryId;
 use ash::extensions::{
     ext::DebugReport,
     khr::{Surface, Swapchain},
@@ -150,6 +151,120 @@ impl LinearUniformBuffer {
     }
 }
 
+pub struct VkProfilerData {
+    pub query_pool: vk::QueryPool,
+    buffer: vk::Buffer,
+    allocation: vk_mem::Allocation,
+    next_query_id: std::sync::atomic::AtomicU32,
+    gpu_profiler_query_ids: Vec<std::cell::Cell<GpuProfilerQueryId>>,
+}
+
+const MAX_QUERY_COUNT: usize = 1024;
+
+impl VkProfilerData {
+    fn new(device: &Device, allocator: &vk_mem::Allocator) -> Self {
+        let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::TRANSFER_DST;
+
+        let mem_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::GpuToCpu,
+            ..Default::default()
+        };
+
+        let (buffer, allocation, _allocation_info) = {
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(MAX_QUERY_COUNT as u64 * 8 * 2)
+                .usage(usage)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .build();
+
+            allocator
+                .create_buffer(&buffer_info, &mem_info)
+                .expect("vma::create_buffer")
+        };
+
+        let pool_info = vk::QueryPoolCreateInfo::builder()
+            .query_type(vk::QueryType::TIMESTAMP)
+            .query_count(MAX_QUERY_COUNT as u32 * 2);
+
+        Self {
+            query_pool: unsafe { device.create_query_pool(&pool_info, None) }
+                .expect("create_query_pool"),
+            buffer,
+            allocation,
+            next_query_id: Default::default(),
+            gpu_profiler_query_ids: vec![
+                std::cell::Cell::new(GpuProfilerQueryId::default());
+                MAX_QUERY_COUNT
+            ],
+        }
+    }
+
+    pub fn get_query_id(&self, gpu_profiler_query_id: GpuProfilerQueryId) -> u32 {
+        // TODO: handle running out of queries
+        let id = self
+            .next_query_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.gpu_profiler_query_ids[id as usize].set(gpu_profiler_query_id);
+        id
+    }
+
+    // Two timing values per query
+    fn retrieve_previous_result(&self) -> (Vec<GpuProfilerQueryId>, Vec<u64>) {
+        let valid_query_count = self
+            .next_query_id
+            .load(std::sync::atomic::Ordering::Relaxed) as usize;
+
+        let mapped_ptr = unsafe { vk_all() }
+            .allocator
+            .map_memory(&self.allocation)
+            .expect("mapping a query buffer failed") as *mut u64;
+
+        let result =
+            unsafe { std::slice::from_raw_parts(mapped_ptr, valid_query_count * 2) }.to_owned();
+
+        unsafe { vk_all() }
+            .allocator
+            .unmap_memory(&self.allocation)
+            .expect("unmapping a query buffer failed");
+
+        (
+            self.gpu_profiler_query_ids[0..valid_query_count]
+                .iter()
+                .map(std::cell::Cell::get)
+                .collect(),
+            result,
+        )
+    }
+
+    fn begin_frame(&self, device: &Device, cmd: vk::CommandBuffer) {
+        unsafe {
+            device.cmd_reset_query_pool(cmd, self.query_pool, 0, MAX_QUERY_COUNT as u32 * 2);
+        }
+
+        self.next_query_id
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn finish_frame(&self, device: &Device, cmd: vk::CommandBuffer) {
+        let valid_query_count = self
+            .next_query_id
+            .load(std::sync::atomic::Ordering::Relaxed);
+
+        unsafe {
+            device.cmd_copy_query_pool_results(
+                cmd,
+                self.query_pool,
+                0,
+                valid_query_count * 2,
+                self.buffer,
+                0,
+                8,
+                vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+            );
+        }
+    }
+}
+
 pub struct VkFrameData {
     pub uniforms: LinearUniformBuffer,
     pub descriptor_pool: Mutex<vk::DescriptorPool>,
@@ -158,6 +273,7 @@ pub struct VkFrameData {
     pub present_image_view: vk::ImageView,
     pub rendering_complete_semaphore: vk::Semaphore,
     pub submit_done_fence: vk::Fence,
+    pub profiler_data: VkProfilerData,
     pub frame_cleanup: Mutex<Vec<Box<dyn Fn(&VkKitchenSink) + Send + Sync>>>,
 }
 
@@ -613,6 +729,8 @@ impl VkKitchenSink {
                         )
                         .expect("Create fence failed.");
 
+                    let profiler_data = VkProfilerData::new(&device, &allocator);
+
                     VkFrameData {
                         uniforms,
                         descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
@@ -624,6 +742,7 @@ impl VkKitchenSink {
                         present_image_view: present_image_views[i],
                         rendering_complete_semaphore: rendering_complete_semaphores[i],
                         submit_done_fence,
+                        profiler_data,
                         frame_cleanup: Mutex::new(Default::default()),
                     }
                 })
@@ -981,6 +1100,14 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device)>(
             .wait_for_fences(&[vk_frame().submit_done_fence], true, std::u64::MAX)
             .expect("Wait for fence failed.");
 
+        let (query_ids, timing_pairs) = vk_frame().profiler_data.retrieve_previous_result();
+
+        crate::gpu_profiler::report_durations_ticks(timing_pairs.chunks_exact(2).enumerate().map(
+            |(pair_idx, chunk)| -> (GpuProfilerQueryId, u64) {
+                (query_ids[pair_idx], chunk[1] - chunk[0])
+            },
+        ));
+
         device
             .reset_command_buffer(
                 command_buffer,
@@ -1010,6 +1137,7 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device)>(
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
             .expect("Begin commandbuffer");
 
+        vk_frame().profiler_data.begin_frame(device, command_buffer);
         vk_frame_mut().uniforms.map();
 
         for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
@@ -1021,6 +1149,10 @@ pub fn record_submit_commandbuffer<F: FnOnce(&Device)>(
         for fd in VK_KITCHEN_SINK.as_mut().unwrap().frame_data.iter_mut() {
             fd.uniforms.unmap();
         }
+
+        vk_frame()
+            .profiler_data
+            .finish_frame(device, command_buffer);
 
         device
             .end_command_buffer(command_buffer)

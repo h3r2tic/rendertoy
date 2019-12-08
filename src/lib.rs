@@ -467,11 +467,11 @@ impl Rendertoy {
         ));
         //let mut total_time_ms = 0.0;
 
-        for (name, _scope) in stats.scopes.iter() {
-            //let text = format!("{}: {:.3}ms", name, scope.average_duration_millis());
-            let text = name;
+        for (_scope_id, scope) in stats.scopes.iter() {
+            let text = format!("{}: {:.3}ms", scope.name, scope.average_duration_millis());
+            //let text = &scope.name;
 
-            let style = if Some(name) == currently_debugged_texture.as_ref() {
+            let style = if Some(&scope.name) == currently_debugged_texture.as_ref() {
                 Some(ui.push_style_color(imgui::StyleColor::Text, [1.0, 0.25, 0.0625, 1.0]))
             } else {
                 None
@@ -485,7 +485,7 @@ impl Rendertoy {
 
             let hit = ui.is_item_hovered();
             if hit {
-                selected_name = Some(name.to_owned());
+                selected_name = Some(scope.name.clone());
             }
         }
 
