@@ -377,7 +377,7 @@ impl Rendertoy {
         if self.frame_time_display_cooldown > 1.0 {
             self.frame_time_display_cooldown = 0.0;
             tracing::info!(
-                "frame time: {:.2}ms ({:.2} fps)",
+                "CPU frame time: {:.2}ms ({:.2} fps)",
                 self.average_frame_time * 1000.0,
                 1.0 / self.average_frame_time
             );
@@ -461,7 +461,7 @@ impl Rendertoy {
     ) -> Option<String> {
         let mut selected_name = None;
         ui.text(format!(
-            "Frame time: {:.2}ms ({:.1} fps)",
+            "CPU frame time: {:.2}ms ({:.1} fps)",
             1000.0 * average_frame_time,
             1.0 / average_frame_time
         ));
