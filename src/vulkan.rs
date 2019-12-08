@@ -37,7 +37,15 @@ fn extension_names(graphics_debugging: bool) -> Vec<*const i8> {
 
 pub struct VkCommandBufferData {
     pub(crate) cb: vk::CommandBuffer,
-    //pool: vk::CommandPool,
+    pool: vk::CommandPool,
+}
+
+impl Drop for VkCommandBufferData {
+    fn drop(&mut self) {
+        unsafe {
+            vk_device().destroy_command_pool(self.pool, None);
+        }
+    }
 }
 
 pub struct LinearUniformBuffer {
@@ -52,6 +60,19 @@ pub struct LinearUniformBuffer {
 
 unsafe impl Send for LinearUniformBuffer {}
 unsafe impl Sync for LinearUniformBuffer {}
+
+impl Drop for LinearUniformBuffer {
+    fn drop(&mut self) {
+        self.unmap();
+
+        unsafe {
+            let vk = vk_all();
+            vk.allocator
+                .destroy_buffer(self.buffer, &self.allocation)
+                .unwrap()
+        }
+    }
+}
 
 impl LinearUniformBuffer {
     fn new(
@@ -157,6 +178,29 @@ pub struct VkProfilerData {
     allocation: vk_mem::Allocation,
     next_query_id: std::sync::atomic::AtomicU32,
     gpu_profiler_query_ids: Vec<std::cell::Cell<GpuProfilerQueryId>>,
+}
+
+impl Drop for VkProfilerData {
+    fn drop(&mut self) {
+        unsafe {
+            let vk = vk_all();
+            vk.allocator
+                .destroy_buffer(self.buffer, &self.allocation)
+                .unwrap();
+
+            vk.device.destroy_query_pool(self.query_pool, None);
+        }
+
+        let valid_query_count = self
+            .next_query_id
+            .load(std::sync::atomic::Ordering::Relaxed) as usize;
+
+        crate::gpu_profiler::forget_queries(
+            self.gpu_profiler_query_ids[0..valid_query_count]
+                .iter()
+                .map(std::cell::Cell::take),
+        );
+    }
 }
 
 const MAX_QUERY_COUNT: usize = 1024;
@@ -269,12 +313,25 @@ pub struct VkFrameData {
     pub uniforms: LinearUniformBuffer,
     pub descriptor_pool: Mutex<vk::DescriptorPool>,
     pub command_buffer: Mutex<VkCommandBufferData>,
-    pub present_image: vk::Image,
-    pub present_image_view: vk::ImageView,
-    pub rendering_complete_semaphore: vk::Semaphore,
     pub submit_done_fence: vk::Fence,
     pub profiler_data: VkProfilerData,
     pub frame_cleanup: Mutex<Vec<Box<dyn Fn(&VkKitchenSink) + Send + Sync>>>,
+}
+
+impl Drop for VkFrameData {
+    fn drop(&mut self) {
+        let device = vk_device();
+        unsafe {
+            device.destroy_descriptor_pool(
+                std::mem::replace(&mut self.descriptor_pool, Default::default())
+                    .into_inner()
+                    .unwrap(),
+                None,
+            );
+
+            device.destroy_fence(self.submit_done_fence, None);
+        }
+    }
 }
 
 pub const SAMPLER_LINEAR: usize = 0;
@@ -296,10 +353,9 @@ pub struct VkKitchenSink {
 
     pub surface: vk::SurfaceKHR,
     pub surface_format: vk::SurfaceFormatKHR,
-    pub surface_resolution: vk::Extent2D,
 
-    pub swapchain: vk::SwapchainKHR,
-    pub swapchain_acquired_semaphores: Vec<vk::Semaphore>,
+    pub swapchain: Option<VkSwapchain>,
+    swapchain_create_info: VkSwapchainCreateInfo,
 
     pub samplers: [vk::Sampler; 1],
 
@@ -312,9 +368,6 @@ pub struct VkKitchenSink {
     pub bindless_images_next_descriptor: Mutex<u32>,
 
     pub frame_data: Vec<VkFrameData>,
-
-    pub window_width: u32,
-    pub window_height: u32,
 
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
@@ -407,10 +460,157 @@ fn allocate_frame_command_buffer(
             .unwrap()
     }[0];
 
-    VkCommandBufferData {
-        cb,
-        //pool,
+    VkCommandBufferData { cb, pool }
+}
+
+#[derive(Clone, Copy, Default)]
+struct VkSwapchainCreateInfo {
+    surface_format: vk::SurfaceFormatKHR,
+    surface_resolution: vk::Extent2D,
+    vsync: bool,
+}
+
+#[derive(Default)]
+pub struct VkSwapchain {
+    pub swapchain: vk::SwapchainKHR,
+    pub present_images: Vec<vk::Image>,
+    pub present_image_views: Vec<vk::ImageView>,
+    pub surface_resolution: vk::Extent2D,
+    pub surface_format: vk::SurfaceFormatKHR,
+    pub swapchain_acquired_semaphores: Vec<vk::Semaphore>,
+    pub rendering_complete_semaphores: Vec<vk::Semaphore>,
+}
+
+impl Drop for VkSwapchain {
+    fn drop(&mut self) {
+        unsafe {
+            for img in self.present_image_views.drain(..) {
+                vk_device().destroy_image_view(img, None);
+            }
+
+            // TODO: semaphores
+
+            vk_all()
+                .swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
+        }
     }
+}
+
+// TODO: Result
+fn create_swapchain(
+    device: &Device,
+    pdevice: vk::PhysicalDevice,
+    swapchain_loader: &Swapchain,
+    surface_loader: &Surface,
+    surface: vk::SurfaceKHR,
+    info: VkSwapchainCreateInfo,
+) -> Option<VkSwapchain> {
+    let surface_capabilities =
+        unsafe { surface_loader.get_physical_device_surface_capabilities(pdevice, surface) }
+            .unwrap();
+    let mut desired_image_count = surface_capabilities.min_image_count + 1;
+    if surface_capabilities.max_image_count > 0
+        && desired_image_count > surface_capabilities.max_image_count
+    {
+        desired_image_count = surface_capabilities.max_image_count;
+    }
+
+    //dbg!(&surface_capabilities);
+    let surface_resolution = match surface_capabilities.current_extent.width {
+        std::u32::MAX => info.surface_resolution,
+        _ => surface_capabilities.current_extent,
+    };
+
+    if 0 == surface_resolution.width || 0 == surface_resolution.height {
+        return None;
+    }
+
+    let present_modes =
+        unsafe { surface_loader.get_physical_device_surface_present_modes(pdevice, surface) }
+            .unwrap();
+    let desired_present_mode = if info.vsync {
+        vk::PresentModeKHR::FIFO_RELAXED
+    } else {
+        vk::PresentModeKHR::MAILBOX
+    };
+    let present_mode = present_modes
+        .iter()
+        .cloned()
+        .find(|&mode| mode == desired_present_mode)
+        .unwrap_or(vk::PresentModeKHR::FIFO);
+
+    let pre_transform = if surface_capabilities
+        .supported_transforms
+        .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
+    {
+        vk::SurfaceTransformFlagsKHR::IDENTITY
+    } else {
+        surface_capabilities.current_transform
+    };
+
+    let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
+        .surface(surface)
+        .min_image_count(desired_image_count)
+        .image_color_space(info.surface_format.color_space)
+        .image_format(info.surface_format.format)
+        .image_extent(surface_resolution)
+        .image_usage(vk::ImageUsageFlags::STORAGE)
+        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .pre_transform(pre_transform)
+        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+        .present_mode(present_mode)
+        .clipped(true)
+        .image_array_layers(1)
+        .build();
+
+    let swapchain =
+        unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None) }.unwrap();
+
+    let present_images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }.unwrap();
+    let present_image_views: Vec<vk::ImageView> = present_images
+        .iter()
+        .map(|&image| {
+            let create_view_info = vk::ImageViewCreateInfo::builder()
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(info.surface_format.format)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::R,
+                    g: vk::ComponentSwizzle::G,
+                    b: vk::ComponentSwizzle::B,
+                    a: vk::ComponentSwizzle::A,
+                })
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image(image);
+            unsafe { device.create_image_view(&create_view_info, None) }.unwrap()
+        })
+        .collect();
+
+    let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+    let create_semaphores = || -> Vec<vk::Semaphore> {
+        (0..present_images.len())
+            .map(|_| unsafe { device.create_semaphore(&semaphore_create_info, None) }.unwrap())
+            .collect()
+    };
+
+    let swapchain_acquired_semaphores = create_semaphores();
+    let rendering_complete_semaphores = create_semaphores();
+
+    Some(VkSwapchain {
+        swapchain,
+        present_images,
+        present_image_views,
+        surface_resolution,
+        surface_format: info.surface_format,
+        swapchain_acquired_semaphores,
+        rendering_complete_semaphores,
+    })
 }
 
 impl VkKitchenSink {
@@ -571,6 +771,11 @@ impl VkKitchenSink {
 
             let present_queue = device.get_device_queue(present_queue_family_index as u32, 0);
 
+            let physical_dimensions = window
+                .get_inner_size()
+                .unwrap()
+                .to_physical(window.get_hidpi_factor());
+
             let surface_formats = surface_loader
                 .get_physical_device_surface_formats(pdevice, surface)
                 .unwrap();
@@ -585,103 +790,26 @@ impl VkKitchenSink {
                 })
                 .nth(0)
                 .expect("Unable to find suitable surface format.");
-            let surface_capabilities = surface_loader
-                .get_physical_device_surface_capabilities(pdevice, surface)
-                .unwrap();
-            let mut desired_image_count = surface_capabilities.min_image_count + 1;
-            if surface_capabilities.max_image_count > 0
-                && desired_image_count > surface_capabilities.max_image_count
-            {
-                desired_image_count = surface_capabilities.max_image_count;
-            }
-            let physical_dimensions = window
-                .get_inner_size()
-                .unwrap()
-                .to_physical(window.get_hidpi_factor());
-            let surface_resolution = match surface_capabilities.current_extent.width {
-                std::u32::MAX => vk::Extent2D {
+
+            let swapchain_loader = Swapchain::new(&instance, &device);
+
+            let swapchain_create_info = VkSwapchainCreateInfo {
+                surface_format,
+                surface_resolution: vk::Extent2D {
                     width: physical_dimensions.width as u32,
                     height: physical_dimensions.height as u32,
                 },
-                _ => surface_capabilities.current_extent,
+                vsync,
             };
-            let pre_transform = if surface_capabilities
-                .supported_transforms
-                .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
-            {
-                vk::SurfaceTransformFlagsKHR::IDENTITY
-            } else {
-                surface_capabilities.current_transform
-            };
-            let present_modes = surface_loader
-                .get_physical_device_surface_present_modes(pdevice, surface)
-                .unwrap();
-            let desired_present_mode = if vsync {
-                vk::PresentModeKHR::FIFO_RELAXED
-            } else {
-                vk::PresentModeKHR::MAILBOX
-            };
-            let present_mode = present_modes
-                .iter()
-                .cloned()
-                .find(|&mode| mode == desired_present_mode)
-                .unwrap_or(vk::PresentModeKHR::FIFO);
-            let swapchain_loader = Swapchain::new(&instance, &device);
-
-            let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
-                .surface(surface)
-                .min_image_count(desired_image_count)
-                .image_color_space(surface_format.color_space)
-                .image_format(surface_format.format)
-                .image_extent(surface_resolution.clone())
-                .image_usage(vk::ImageUsageFlags::STORAGE)
-                .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .pre_transform(pre_transform)
-                .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(present_mode)
-                .clipped(true)
-                .image_array_layers(1);
-
-            let swapchain = swapchain_loader
-                .create_swapchain(&swapchain_create_info, None)
-                .unwrap();
-
-            let present_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
-            let present_image_views: Vec<vk::ImageView> = present_images
-                .iter()
-                .map(|&image| {
-                    let create_view_info = vk::ImageViewCreateInfo::builder()
-                        .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(surface_format.format)
-                        .components(vk::ComponentMapping {
-                            r: vk::ComponentSwizzle::R,
-                            g: vk::ComponentSwizzle::G,
-                            b: vk::ComponentSwizzle::B,
-                            a: vk::ComponentSwizzle::A,
-                        })
-                        .subresource_range(vk::ImageSubresourceRange {
-                            aspect_mask: vk::ImageAspectFlags::COLOR,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        })
-                        .image(image);
-                    device.create_image_view(&create_view_info, None).unwrap()
-                })
-                .collect();
-
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            let create_swapchain_semaphores = || -> Vec<vk::Semaphore> {
-                (0..present_images.len())
-                    .map(|_| {
-                        device
-                            .create_semaphore(&semaphore_create_info, None)
-                            .unwrap()
-                    })
-                    .collect()
-            };
+            let swapchain = create_swapchain(
+                &device,
+                pdevice,
+                &swapchain_loader,
+                &surface_loader,
+                surface,
+                swapchain_create_info,
+            )
+            .unwrap();
 
             let sampler_info = vk::SamplerCreateInfo {
                 mag_filter: vk::Filter::LINEAR,
@@ -697,56 +825,17 @@ impl VkKitchenSink {
             };
             let sampler = device.create_sampler(&sampler_info, None).unwrap();
 
-            let swapchain_acquired_semaphores = create_swapchain_semaphores();
-            let rendering_complete_semaphores = create_swapchain_semaphores();
-
             let allocator_info = vk_mem::AllocatorCreateInfo {
                 physical_device: pdevice,
                 device: device.clone(),
                 instance: instance.clone(),
                 flags: vk_mem::AllocatorCreateFlags::NONE,
                 preferred_large_heap_block_size: 0,
-                frame_in_use_count: surface_capabilities.min_image_count,
+                frame_in_use_count: swapchain.present_images.len() as u32,
                 heap_size_limits: None,
             };
             let allocator = vk_mem::Allocator::new(&allocator_info)
                 .expect("failed to create vulkan memory allocator");
-
-            let frame_data = (0..present_images.len())
-                .map(|i| {
-                    let uniforms = LinearUniformBuffer::new(
-                        1 << 20,
-                        &allocator,
-                        device_properties.limits.min_uniform_buffer_offset_alignment as usize,
-                    );
-
-                    let submit_done_fence = device
-                        .create_fence(
-                            &vk::FenceCreateInfo::builder()
-                                .flags(vk::FenceCreateFlags::SIGNALED)
-                                .build(),
-                            None,
-                        )
-                        .expect("Create fence failed.");
-
-                    let profiler_data = VkProfilerData::new(&device, &allocator);
-
-                    VkFrameData {
-                        uniforms,
-                        descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&device)),
-                        command_buffer: Mutex::new(allocate_frame_command_buffer(
-                            &device,
-                            present_queue_family_index,
-                        )),
-                        present_image: present_images[i],
-                        present_image_view: present_image_views[i],
-                        rendering_complete_semaphore: rendering_complete_semaphores[i],
-                        submit_done_fence,
-                        profiler_data,
-                        frame_cleanup: Mutex::new(Default::default()),
-                    }
-                })
-                .collect();
 
             let bindless_buffers_descriptor_set = Self::create_bindless_resource_descriptor_set(
                 &device,
@@ -761,8 +850,8 @@ impl VkKitchenSink {
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(vk::Format::D24_UNORM_S8_UINT)
                 .extent(vk::Extent3D {
-                    width: surface_resolution.width,
-                    height: surface_resolution.height,
+                    width: swapchain.surface_resolution.width,
+                    height: swapchain.surface_resolution.height,
                     depth: 1,
                 })
                 .mip_levels(1)
@@ -816,7 +905,7 @@ impl VkKitchenSink {
                 };
             });
 
-            Ok(Self {
+            let mut res = Self {
                 entry,
                 instance,
                 device,
@@ -827,12 +916,11 @@ impl VkKitchenSink {
                 surface_loader,
                 surface_format,
                 present_queue,
-                surface_resolution,
                 swapchain_loader,
-                swapchain,
-                swapchain_acquired_semaphores,
+                swapchain: Some(swapchain),
+                swapchain_create_info,
                 samplers: [sampler],
-                frame_data,
+                frame_data: Vec::new(),
                 surface,
                 allocator,
                 bindless_buffers_descriptor_set,
@@ -841,12 +929,56 @@ impl VkKitchenSink {
                 bindless_images_next_descriptor: Mutex::new(0),
                 debug_call_back,
                 debug_report_loader,
-                window_width: physical_dimensions.width as u32,
-                window_height: physical_dimensions.height as u32,
                 depth_image,
                 depth_image_view,
-            })
+            };
+
+            res.create_frame_data();
+            Ok(res)
         }
+    }
+
+    pub fn swapchain_size_pixels(&self) -> (u32, u32) {
+        let vk::Extent2D { width, height } = self.swapchain.as_ref().unwrap().surface_resolution;
+        (width, height)
+    }
+
+    fn create_frame_data(&mut self) {
+        self.frame_data = (0..self.swapchain.as_ref().unwrap().present_images.len())
+            .map(|_| {
+                let uniforms = LinearUniformBuffer::new(
+                    1 << 20,
+                    &self.allocator,
+                    self.device_properties
+                        .limits
+                        .min_uniform_buffer_offset_alignment as usize,
+                );
+
+                let submit_done_fence = unsafe {
+                    self.device.create_fence(
+                        &vk::FenceCreateInfo::builder()
+                            .flags(vk::FenceCreateFlags::SIGNALED)
+                            .build(),
+                        None,
+                    )
+                }
+                .expect("Create fence failed.");
+
+                let profiler_data = VkProfilerData::new(&self.device, &self.allocator);
+
+                VkFrameData {
+                    uniforms,
+                    descriptor_pool: Mutex::new(allocate_frame_descriptor_pool(&self.device)),
+                    command_buffer: Mutex::new(allocate_frame_command_buffer(
+                        &self.device,
+                        self.present_queue_family_index,
+                    )),
+                    submit_done_fence,
+                    profiler_data,
+                    frame_cleanup: Mutex::new(Default::default()),
+                }
+            })
+            .collect();
     }
 
     pub(crate) fn register_image_bindless_index(&self, view: vk::ImageView) -> u32 {
@@ -1066,15 +1198,16 @@ impl Drop for VkKitchenSink {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
-            for s in self.swapchain_acquired_semaphores.iter() {
+            // TODO:
+            /*for s in self.swapchain_acquired_semaphores.iter() {
                 self.device.destroy_semaphore(*s, None);
-            }
-            for s in self.frame_data.iter() {
+            }*/
+            /*for s in self.frame_data.iter() {
                 self.device
                     .destroy_semaphore(s.rendering_complete_semaphore, None);
-            }
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
+            }*/
+            /*self.swapchain_loader
+            .destroy_swapchain(self.swapchain.swapchain, None);*/
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
             if let Some(debug_report_loader) = self.debug_report_loader.as_ref() {
@@ -1196,6 +1329,34 @@ pub unsafe fn vk_all() -> &'static VkKitchenSink {
     std::mem::transmute(VK_KITCHEN_SINK.as_ref().expect("vk kitchen sink"))
 }
 
+pub unsafe fn vk_resize(width: u32, height: u32) -> bool {
+    let vk = VK_KITCHEN_SINK.as_mut().unwrap();
+    vk.device.device_wait_idle().unwrap();
+
+    let mut create_info = vk.swapchain_create_info;
+    create_info.surface_resolution = vk::Extent2D { width, height };
+
+    vk.frame_data = Vec::new();
+    vk.swapchain = None;
+
+    vk.swapchain = create_swapchain(
+        &vk.device,
+        vk.pdevice,
+        &vk.swapchain_loader,
+        &vk.surface_loader,
+        vk.surface,
+        create_info,
+    );
+
+    if vk.swapchain.is_some() {
+        vk.swapchain_create_info = create_info;
+        vk.create_frame_data();
+        true
+    } else {
+        false
+    }
+}
+
 pub unsafe fn vk_frame() -> &'static VkFrameData {
     assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
     std::mem::transmute(
@@ -1204,6 +1365,10 @@ pub unsafe fn vk_frame() -> &'static VkFrameData {
             .expect("vk kitchen sink")
             .frame_data[VK_CURRENT_FRAME_DATA_IDX],
     )
+}
+
+pub fn vk_frame_index() -> usize {
+    unsafe { VK_CURRENT_FRAME_DATA_IDX }
 }
 
 pub(crate) unsafe fn vk_frame_mut() -> &'static mut VkFrameData {

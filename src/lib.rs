@@ -96,6 +96,9 @@ pub struct Rendertoy {
     imgui_backend: ImGuiBackend,
     gpu_profiler_stats: Option<GpuProfilerStats>,
     dump_next_frame_dot_graph: bool,
+    swapchain_acquired_semaphore_idx: usize,
+    present_descriptor_sets: Vec<vk::DescriptorSet>,
+    present_pipeline: shader::ComputePipeline,
 }
 
 #[derive(Clone)]
@@ -199,9 +202,13 @@ impl Rendertoy {
         );
 
         let mut imgui = imgui::Context::create();
-        let imgui_backend = ImGuiBackend::new(&window, &mut imgui);
+        let mut imgui_backend = ImGuiBackend::new(&window, &mut imgui);
+        imgui_backend.create_graphics_resources();
 
-        Rendertoy {
+        let (present_descriptor_sets, present_pipeline) =
+            Self::create_present_descriptor_sets_and_pipeline();
+
+        Self {
             rt,
             window,
             events_loop,
@@ -219,7 +226,62 @@ impl Rendertoy {
             imgui_backend,
             gpu_profiler_stats: None,
             dump_next_frame_dot_graph: false,
+            swapchain_acquired_semaphore_idx: 0,
+            present_descriptor_sets,
+            present_pipeline,
         }
+    }
+
+    fn create_present_descriptor_sets_and_pipeline(
+    ) -> (Vec<vk::DescriptorSet>, shader::ComputePipeline) {
+        use ash::version::DeviceV1_0;
+        use vulkan::*;
+        let vk = unsafe { vk_all() };
+
+        let present_descriptor_set_layout = unsafe {
+            vk.device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::builder()
+                        .bindings(&[
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(0)
+                                .build(),
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(1)
+                                .build(),
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(2)
+                                .build(),
+                            vk::DescriptorSetLayoutBinding::builder()
+                                .descriptor_count(1)
+                                .descriptor_type(vk::DescriptorType::SAMPLER)
+                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                                .binding(3)
+                                .immutable_samplers(&[vk.samplers[vulkan::SAMPLER_LINEAR]])
+                                .build(),
+                        ])
+                        .build(),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let present_descriptor_sets =
+            vk.create_present_descriptor_sets(present_descriptor_set_layout);
+        let present_pipeline =
+            create_present_compute_pipeline(&vk.device, present_descriptor_set_layout)
+                .expect("create_present_compute_pipeline");
+
+        (present_descriptor_sets, present_pipeline)
     }
 
     pub fn new() -> Rendertoy {
@@ -274,74 +336,63 @@ impl Rendertoy {
             });
         }
 
-        //with_gl_and_context(|_, windowed_context|
-        {
-            //windowed_context.swap_buffers().unwrap();
+        let mut running = true;
 
-            let mut running = true;
+        let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
+        let mut new_mouse_state = self.mouse_state.clone();
 
-            let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
-            let mut new_mouse_state = self.mouse_state.clone();
+        let gui_want_capture_mouse = self.imgui.io().want_capture_mouse;
 
-            let gui_want_capture_mouse = self.imgui.io().want_capture_mouse;
-
-            for event in events.iter() {
-                #[allow(clippy::single_match)]
-                match event {
-                    winit::Event::WindowEvent { event, .. } => match event {
-                        winit::WindowEvent::CloseRequested => running = false,
-                        /*winit::WindowEvent::Resized(logical_size) => {
-                            let dpi_factor = self.window.get_hidpi_factor();
-                            let phys_size = logical_size.to_physical(dpi_factor);
-                            windowed_context.resize(phys_size);
-                        }*/
-                        winit::WindowEvent::KeyboardInput { input, .. } => {
-                            if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
-                                if input.state == ElementState::Pressed {
-                                    self.show_gui = !self.show_gui;
-                                }
-                            } else {
-                                keyboard_events.push(*input);
+        for event in events.iter() {
+            #[allow(clippy::single_match)]
+            match event {
+                winit::Event::WindowEvent { event, .. } => match event {
+                    winit::WindowEvent::CloseRequested => running = false,
+                    winit::WindowEvent::KeyboardInput { input, .. } => {
+                        if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
+                            if input.state == ElementState::Pressed {
+                                self.show_gui = !self.show_gui;
                             }
+                        } else {
+                            keyboard_events.push(*input);
                         }
-                        winit::WindowEvent::CursorMoved {
-                            position: logical_pos,
-                            device_id: _,
-                            modifiers: _,
-                        } if !gui_want_capture_mouse => {
-                            let dpi_factor = self.window.get_hidpi_factor();
-                            let pos = logical_pos.to_physical(dpi_factor);
-                            new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
-                        }
-                        winit::WindowEvent::MouseInput { state, button, .. }
-                            if !gui_want_capture_mouse =>
-                        {
-                            let button_id = match button {
-                                winit::MouseButton::Left => 0,
-                                winit::MouseButton::Middle => 1,
-                                winit::MouseButton::Right => 2,
-                                _ => 0,
-                            };
+                    }
+                    winit::WindowEvent::CursorMoved {
+                        position: logical_pos,
+                        device_id: _,
+                        modifiers: _,
+                    } if !gui_want_capture_mouse => {
+                        let dpi_factor = self.window.get_hidpi_factor();
+                        let pos = logical_pos.to_physical(dpi_factor);
+                        new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
+                    }
+                    winit::WindowEvent::MouseInput { state, button, .. }
+                        if !gui_want_capture_mouse =>
+                    {
+                        let button_id = match button {
+                            winit::MouseButton::Left => 0,
+                            winit::MouseButton::Middle => 1,
+                            winit::MouseButton::Right => 2,
+                            _ => 0,
+                        };
 
-                            if let winit::ElementState::Pressed = state {
-                                new_mouse_state.button_mask |= 1 << button_id;
-                            } else {
-                                new_mouse_state.button_mask &= !(1 << button_id);
-                            }
+                        if let winit::ElementState::Pressed = state {
+                            new_mouse_state.button_mask |= 1 << button_id;
+                        } else {
+                            new_mouse_state.button_mask &= !(1 << button_id);
                         }
-                        _ => (),
-                    },
+                    }
                     _ => (),
-                }
+                },
+                _ => (),
             }
-
-            // TODO: proper time
-            self.keyboard.update(keyboard_events, 1.0 / 60.0);
-            self.mouse_state.update(&new_mouse_state);
-
-            running
         }
-        //)
+
+        // TODO: proper time
+        self.keyboard.update(keyboard_events, self.dt);
+        self.mouse_state.update(&new_mouse_state);
+
+        running
     }
 
     fn get_currently_debugged_texture(&self) -> Option<String> {
@@ -417,39 +468,16 @@ impl Rendertoy {
             file.write_all(dot.as_bytes()).expect("file.write_all");
         }
 
-        //with_gl(|gl| unsafe
         let debugged_texture = {
-            /*gl.ClipControl(gl::LOWER_LEFT, gl::ZERO_TO_ONE);
-            gl.BindVertexArray(self.gl_state.vao);
-            gl.Enable(gl::CULL_FACE);
-            gl.Disable(gl::STENCIL_TEST);
-            gl.Disable(gl::BLEND);*/
-
             let mut debugged_texture: Option<vk::ImageView> = None;
             gpu_debugger::with_textures(|data| {
-                /*debugged_texture = self
-                .selected_debug_name
-                .as_ref()
-                .or(self.locked_debug_name.as_ref())
-                .and_then(|name| data.textures.get(name).cloned());*/
                 debugged_texture = self
                     .get_currently_debugged_texture()
                     .and_then(|name| data.textures.get(&name).cloned());
             });
             debugged_texture
-
-            // TODO
-            //draw_fullscreen_texture(final_texture, state.window_size_pixels);
-
-            // TODO: copy output to screen
-            /*backend::draw::draw_fullscreen_texture(
-                &gfx,
-                debugged_texture.unwrap_or(final_texture.view),
-                state.window_size_pixels,
-            );*/
         };
-        //);
-        //
+
         debugged_texture.unwrap_or(final_texture)
     }
 
@@ -572,270 +600,254 @@ impl Rendertoy {
         );
     }*/
 
-    pub fn draw_forever<F>(mut self, mut callback: F)
-    where
-        F: FnMut(&FrameState) -> SnoozyRef<Texture>,
-    {
-        use ash::version::DeviceV1_0;
-        use vulkan::*;
-
-        /*let vg_context = with_gl(|_| {
-            nanovg::ContextBuilder::new()
-                .stencil_strokes()
-                .build()
-                .expect("Initialization of NanoVG failed!")
-        });
-
-        let font = with_gl(|_| {
-            let snapshot = get_snapshot();
-            let rt = Runtime::new().unwrap();
-            let blob = &*rt.block_on(snapshot.get(load_blob(asset!("fonts/Roboto-Regular.ttf"))));
-
-                Font::from_memory(&vg_context, "Roboto-Regular", blob.contents.as_slice())
-                    .expect("Failed to load font 'Roboto-Regular.ttf'")
-        });
-
-        dbg!();*/
-
-        let mut swapchain_acquired_semaphore_idx = 0;
-
-        let vk = unsafe { vk_all() };
-        let present_descriptor_set_layout = unsafe {
-            vk.device
-                .create_descriptor_set_layout(
-                    &vk::DescriptorSetLayoutCreateInfo::builder()
-                        .bindings(&[
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(0)
-                                .build(),
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(1)
-                                .build(),
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(2)
-                                .build(),
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLER)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(3)
-                                .immutable_samplers(&[vk.samplers[vulkan::SAMPLER_LINEAR]])
-                                .build(),
-                        ])
-                        .build(),
-                    None,
-                )
-                .unwrap()
-        };
-
-        let present_descriptor_sets =
-            vk.create_present_descriptor_sets(present_descriptor_set_layout);
-        let present_pipeline =
-            create_present_compute_pipeline(&vk.device, present_descriptor_set_layout)
-                .expect("create_present_compute_pipeline");
-
+    pub fn draw_forever(mut self, mut callback: impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
         let mut running = true;
         while running {
-            swapchain_acquired_semaphore_idx =
-                (swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
-
-            let present_index = unsafe {
-                let (present_index, _) = vk
-                    .swapchain_loader
-                    .acquire_next_image(
-                        vk.swapchain,
-                        std::u64::MAX,
-                        vk.swapchain_acquired_semaphores[swapchain_acquired_semaphore_idx],
-                        vk::Fence::null(),
-                    )
-                    .unwrap();
-                present_index as usize
-            };
-            unsafe {
-                vk_begin_frame(present_index);
+            if unsafe { crate::vulkan::vk_all() }.swapchain.is_some() {
+                self.render_frame(&mut callback);
+            } else {
+                self.resize();
             }
-
-            let vk_frame = unsafe { vk_frame() };
-
-            // TODO: don't abuse the Copy
-            let cb = vk_frame.command_buffer.lock().unwrap().cb;
-
-            record_submit_commandbuffer(
-                &vk.device,
-                cb,
-                vk.present_queue,
-                &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
-                &[vk.swapchain_acquired_semaphores[swapchain_acquired_semaphore_idx]],
-                &[vk_frame.rendering_complete_semaphore],
-                |_device| {
-                    let present_image = vk_frame.present_image;
-
-                    vk.record_image_barrier(
-                        cb,
-                        ImageBarrier::new(
-                            present_image,
-                            vk_sync::AccessType::Present,
-                            vk_sync::AccessType::ComputeShaderWrite,
-                        )
-                        .with_discard(true),
-                    );
-
-                    let final_texture = self.draw_with_frame_snapshot(&mut callback);
-
-                    let currently_debugged_texture = self.get_currently_debugged_texture().clone();
-                    let ui =
-                        self.imgui_backend
-                            .prepare_frame(&self.window, &mut self.imgui, self.dt);
-                    {
-                        if self.show_gui {
-                            self.dump_next_frame_dot_graph =
-                                ui.button(im_str!("Save frame.dot dump"), [0.0, 0.0]);
-                            ui.spacing();
-
-                            if ui
-                                .collapsing_header(im_str!("GPU passes"))
-                                .default_open(true)
-                                .build()
-                            {
-                                if let Some(ref stats) = self.gpu_profiler_stats {
-                                    self.selected_debug_name = Self::draw_profiling_stats(
-                                        &ui,
-                                        self.average_frame_time,
-                                        stats,
-                                        &currently_debugged_texture,
-                                    );
-                                }
-                            }
-
-                            /*self.draw_warnings(
-                                gl,
-                                windowed_context,
-                                &vg_context,
-                                &font,
-                                RTOY_WARNINGS.lock().unwrap().drain(..),
-                            );*/
-                        }
-                    }
-                    let gui_texture_view = self.imgui_backend.render(&self.window, ui, cb);
-
-                    unsafe {
-                        vk.device.update_descriptor_sets(
-                            &[
-                                vk::WriteDescriptorSet::builder()
-                                    .dst_set(present_descriptor_sets[present_index])
-                                    .dst_binding(0)
-                                    .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                    .image_info(&[vk::DescriptorImageInfo::builder()
-                                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                        .image_view(final_texture)
-                                        .build()])
-                                    .build(),
-                                vk::WriteDescriptorSet::builder()
-                                    .dst_set(present_descriptor_sets[present_index])
-                                    .dst_binding(1)
-                                    .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                    .image_info(&[vk::DescriptorImageInfo::builder()
-                                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                        .image_view(gui_texture_view)
-                                        .build()])
-                                    .build(),
-                                vk::WriteDescriptorSet::builder()
-                                    .dst_set(present_descriptor_sets[present_index])
-                                    .dst_binding(2)
-                                    .dst_array_element(0)
-                                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                    .image_info(&[vk::DescriptorImageInfo::builder()
-                                        .image_layout(vk::ImageLayout::GENERAL)
-                                        .image_view(vk_frame.present_image_view)
-                                        .build()])
-                                    .build(),
-                            ],
-                            &[],
-                        );
-
-                        vk.device.cmd_bind_pipeline(
-                            cb,
-                            vk::PipelineBindPoint::COMPUTE,
-                            present_pipeline.pipeline,
-                        );
-                        vk.device.cmd_bind_descriptor_sets(
-                            cb,
-                            vk::PipelineBindPoint::COMPUTE,
-                            present_pipeline.pipeline_layout,
-                            0,
-                            &[present_descriptor_sets[present_index]],
-                            &[],
-                        );
-                        let push_constants: (f32, f32) =
-                            (1.0 / vk.window_width as f32, 1.0 / vk.window_height as f32);
-                        vk.device.cmd_push_constants(
-                            cb,
-                            present_pipeline.pipeline_layout,
-                            vk::ShaderStageFlags::COMPUTE,
-                            0,
-                            std::slice::from_raw_parts(
-                                &push_constants.0 as *const f32 as *const u8,
-                                2 * 4,
-                            ),
-                        );
-                        vk.device
-                            .cmd_dispatch(cb, vk.window_width / 8, vk.window_height / 8, 1);
-                    }
-
-                    vk.record_image_barrier(
-                        cb,
-                        ImageBarrier::new(
-                            present_image,
-                            vk_sync::AccessType::ComputeShaderWrite,
-                            vk_sync::AccessType::Present,
-                        ),
-                    );
-                },
-            );
-
-            let wait_semaphores = [vk_frame.rendering_complete_semaphore];
-            let swapchains = [vk.swapchain];
-            let image_indices = [present_index as u32];
-            let present_info = vk::PresentInfoKHR::builder()
-                .wait_semaphores(&wait_semaphores)
-                .swapchains(&swapchains)
-                .image_indices(&image_indices);
-
-            unsafe {
-                vk.swapchain_loader
-                    .queue_present(vk.present_queue, &present_info)
-                    .unwrap();
-            }
-
-            //with_gl_and_context(|gl, windowed_context|
-            {
-                let gfx = Gfx {}; // TODO
-                gpu_profiler::end_frame(&gfx);
-                gpu_debugger::end_frame();
-
-                self.gpu_profiler_stats = Some(gpu_profiler::get_stats());
-            }
-            //);
 
             running = self.next_frame();
         }
     }
-}
 
-/*pub fn draw_fullscreen_texture(tex: &Texture, framebuffer_size: (u32, u32)) {
-    backend::draw::draw_fullscreen_texture(tex.texture_id, framebuffer_size);
-}*/
+    fn resize(&mut self) {
+        let logical_size = self.window.get_inner_size().unwrap();
+        let dpi_factor = self.window.get_hidpi_factor();
+        let phys_size = logical_size.to_physical(dpi_factor);
+
+        self.imgui_backend.destroy_graphics_resources();
+
+        if unsafe { crate::vulkan::vk_resize(phys_size.width as u32, phys_size.height as u32) } {
+            self.imgui_backend.create_graphics_resources();
+        }
+    }
+
+    fn render_frame(&mut self, callback: &mut impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
+        use ash::version::DeviceV1_0;
+        use vulkan::*;
+        let vk = unsafe { vk_all() };
+
+        let swapchain = vk.swapchain.as_ref().unwrap();
+
+        self.swapchain_acquired_semaphore_idx =
+            (self.swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
+
+        let present_index = unsafe {
+            let (present_index, _) = {
+                match vk.swapchain_loader.acquire_next_image(
+                    swapchain.swapchain,
+                    std::u64::MAX,
+                    swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx],
+                    vk::Fence::null(),
+                ) {
+                    Ok(res) => res,
+                    Err(err)
+                        if err == vk::Result::ERROR_OUT_OF_DATE_KHR
+                            || err == vk::Result::SUBOPTIMAL_KHR =>
+                    {
+                        self.resize();
+
+                        // Try again
+                        return;
+                    }
+                    err @ _ => {
+                        panic!("Could not acquire swapchain image: {:?}", err);
+                    }
+                }
+            };
+
+            present_index as usize
+        };
+        unsafe {
+            vk_begin_frame(present_index);
+        }
+
+        let vk_frame = unsafe { vk_frame() };
+
+        // TODO: don't abuse the Copy
+        let cb = vk_frame.command_buffer.lock().unwrap().cb;
+
+        record_submit_commandbuffer(
+            &vk.device,
+            cb,
+            vk.present_queue,
+            &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
+            &[swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx]],
+            &[swapchain.rendering_complete_semaphores[vk_frame_index()]],
+            |_device| {
+                let present_image = swapchain.present_images[vk_frame_index()];
+
+                vk.record_image_barrier(
+                    cb,
+                    ImageBarrier::new(
+                        present_image,
+                        vk_sync::AccessType::Present,
+                        vk_sync::AccessType::ComputeShaderWrite,
+                    )
+                    .with_discard(true),
+                );
+
+                let final_texture = self.draw_with_frame_snapshot(callback);
+
+                let currently_debugged_texture = self.get_currently_debugged_texture().clone();
+                let ui = self
+                    .imgui_backend
+                    .prepare_frame(&self.window, &mut self.imgui, self.dt);
+                {
+                    if self.show_gui {
+                        self.dump_next_frame_dot_graph =
+                            ui.button(im_str!("Save frame.dot dump"), [0.0, 0.0]);
+                        ui.spacing();
+
+                        if ui
+                            .collapsing_header(im_str!("GPU passes"))
+                            .default_open(true)
+                            .build()
+                        {
+                            if let Some(ref stats) = self.gpu_profiler_stats {
+                                self.selected_debug_name = Self::draw_profiling_stats(
+                                    &ui,
+                                    self.average_frame_time,
+                                    stats,
+                                    &currently_debugged_texture,
+                                );
+                            }
+                        }
+
+                        /*self.draw_warnings(
+                            gl,
+                            windowed_context,
+                            &vg_context,
+                            &font,
+                            RTOY_WARNINGS.lock().unwrap().drain(..),
+                        );*/
+                    }
+                }
+                let gui_texture_view = self
+                    .imgui_backend
+                    .render(&self.window, ui, cb)
+                    .expect("gui texture");
+
+                unsafe {
+                    vk.device.update_descriptor_sets(
+                        &[
+                            vk::WriteDescriptorSet::builder()
+                                .dst_set(self.present_descriptor_sets[present_index])
+                                .dst_binding(0)
+                                .dst_array_element(0)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                .image_info(&[vk::DescriptorImageInfo::builder()
+                                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                    .image_view(final_texture)
+                                    .build()])
+                                .build(),
+                            vk::WriteDescriptorSet::builder()
+                                .dst_set(self.present_descriptor_sets[present_index])
+                                .dst_binding(1)
+                                .dst_array_element(0)
+                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                                .image_info(&[vk::DescriptorImageInfo::builder()
+                                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                                    .image_view(gui_texture_view)
+                                    .build()])
+                                .build(),
+                            vk::WriteDescriptorSet::builder()
+                                .dst_set(self.present_descriptor_sets[present_index])
+                                .dst_binding(2)
+                                .dst_array_element(0)
+                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                                .image_info(&[vk::DescriptorImageInfo::builder()
+                                    .image_layout(vk::ImageLayout::GENERAL)
+                                    .image_view(swapchain.present_image_views[vk_frame_index()])
+                                    .build()])
+                                .build(),
+                        ],
+                        &[],
+                    );
+
+                    vk.device.cmd_bind_pipeline(
+                        cb,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.present_pipeline.pipeline,
+                    );
+                    vk.device.cmd_bind_descriptor_sets(
+                        cb,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.present_pipeline.pipeline_layout,
+                        0,
+                        &[self.present_descriptor_sets[present_index]],
+                        &[],
+                    );
+                    let output_size_pixels = vk.swapchain_size_pixels();
+                    let push_constants: (f32, f32) = (
+                        1.0 / output_size_pixels.0 as f32,
+                        1.0 / output_size_pixels.1 as f32,
+                    );
+                    vk.device.cmd_push_constants(
+                        cb,
+                        self.present_pipeline.pipeline_layout,
+                        vk::ShaderStageFlags::COMPUTE,
+                        0,
+                        std::slice::from_raw_parts(
+                            &push_constants.0 as *const f32 as *const u8,
+                            2 * 4,
+                        ),
+                    );
+                    vk.device.cmd_dispatch(
+                        cb,
+                        (output_size_pixels.0 + 7) / 8,
+                        (output_size_pixels.1 + 7) / 8,
+                        1,
+                    );
+                }
+
+                vk.record_image_barrier(
+                    cb,
+                    ImageBarrier::new(
+                        present_image,
+                        vk_sync::AccessType::ComputeShaderWrite,
+                        vk_sync::AccessType::Present,
+                    ),
+                );
+            },
+        );
+
+        let wait_semaphores = [swapchain.rendering_complete_semaphores[vk_frame_index()]];
+        let swapchains = [swapchain.swapchain];
+        let image_indices = [present_index as u32];
+        let present_info = vk::PresentInfoKHR::builder()
+            .wait_semaphores(&wait_semaphores)
+            .swapchains(&swapchains)
+            .image_indices(&image_indices);
+
+        unsafe {
+            match vk
+                .swapchain_loader
+                .queue_present(vk.present_queue, &present_info)
+            {
+                Ok(_) => (),
+                Err(err)
+                    if err == vk::Result::ERROR_OUT_OF_DATE_KHR
+                        || err == vk::Result::SUBOPTIMAL_KHR =>
+                {
+                    // Handled it in the next frame
+                }
+                err @ _ => {
+                    panic!("Could not acquire swapchain image: {:?}", err);
+                }
+            }
+        }
+
+        let gfx = Gfx {}; // TODO
+        gpu_profiler::end_frame(&gfx);
+        gpu_debugger::end_frame();
+
+        self.gpu_profiler_stats = Some(gpu_profiler::get_stats());
+    }
+}
 
 lazy_static! {
     static ref RTOY_WARNINGS: std::sync::Mutex<Vec<String>> =
@@ -967,12 +979,6 @@ fn create_present_compute_pipeline(
         let pipeline = vk_device
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
             .expect("pipeline")[0];
-
-        /*let data = ComputePipelineData {
-            pipeline: pipelines[0],
-            descriptor_layouts,
-            layout: pipeline_layout,
-        };*/
 
         Ok(crate::shader::ComputePipeline {
             pipeline_layout,

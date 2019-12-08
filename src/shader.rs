@@ -769,8 +769,9 @@ pub async fn make_raster_pipeline(
     }
 
     let surface_format = vk::Format::R32G32B32A32_SFLOAT;
-    let width = unsafe { vk_all() }.window_width;
-    let height = unsafe { vk_all() }.window_height;
+    //let (width, height) = unsafe { vk_all() }.swapchain_size_pixels();
+    let width = 1;
+    let height = 1;
 
     let renderpass_attachments = [
         vk::AttachmentDescription {
@@ -1521,8 +1522,6 @@ pub async fn raster_tex(
     let device = vk_device();
     let vk_all = unsafe { vk_all() };
     let vk_frame = unsafe { vk_frame() };
-    let width = vk_all.window_width;
-    let height = vk_all.window_height;
 
     let cb = vk_frame.command_buffer.lock().unwrap();
     let cb: vk::CommandBuffer = cb.cb;
@@ -1564,8 +1563,8 @@ pub async fn raster_tex(
             // HACK; must not do this, but validation layers are broken with IMAGELESS_KHR
             let fbo_desc = vk::FramebufferCreateInfo::builder()
                 .render_pass(raster_pipe.render_pass)
-                .width(width as _)
-                .height(height as _)
+                .width(key.width as _)
+                .height(key.height as _)
                 .layers(1)
                 .attachments(&texture_attachments);
             let fbo = device.create_framebuffer(&fbo_desc, None)?;
@@ -1587,8 +1586,8 @@ pub async fn raster_tex(
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D {
-                    width: width as _,
-                    height: height as _,
+                    width: key.width as _,
+                    height: key.height as _,
                 },
             })
             .clear_values(&clear_values);
@@ -1654,9 +1653,9 @@ pub async fn raster_tex(
                     0,
                     &[vk::Viewport {
                         x: 0.0,
-                        y: (height as f32),
-                        width: width as _,
-                        height: -(height as f32),
+                        y: (key.height as f32),
+                        width: key.width as _,
+                        height: -(key.height as f32),
                         min_depth: 0.0,
                         max_depth: 1.0,
                     }],
@@ -1667,8 +1666,8 @@ pub async fn raster_tex(
                     &[vk::Rect2D {
                         offset: vk::Offset2D { x: 0, y: 0 },
                         extent: vk::Extent2D {
-                            width: width as _,
-                            height: height as _,
+                            width: key.width as _,
+                            height: key.height as _,
                         },
                     }],
                 );

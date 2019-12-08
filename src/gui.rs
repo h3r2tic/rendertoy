@@ -4,12 +4,16 @@ use ash::vk;
 
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 
-pub struct ImGuiBackend {
-    imgui_platform: WinitPlatform,
-    imgui_renderer: ash_imgui::Renderer,
+struct GfxResources {
     imgui_render_pass: vk::RenderPass,
     imgui_framebuffer: vk::Framebuffer,
     imgui_texture: Texture,
+}
+
+pub struct ImGuiBackend {
+    imgui_platform: WinitPlatform,
+    imgui_renderer: ash_imgui::Renderer,
+    gfx: Option<GfxResources>,
 }
 
 impl ImGuiBackend {
@@ -56,17 +60,48 @@ impl ImGuiBackend {
             )
         };
 
+        Self {
+            imgui_platform,
+            imgui_renderer,
+            gfx: None,
+        }
+    }
+
+    pub fn destroy_graphics_resources(&mut self) {
+        use crate::vulkan::*;
+        let device = vk_device();
+        unsafe { device.device_wait_idle() }.unwrap();
+
+        if self.imgui_renderer.has_pipeline() {
+            self.imgui_renderer.destroy_pipeline(vk_device());
+        }
+
+        if let Some(gfx) = self.gfx.take() {
+            unsafe {
+                device.destroy_render_pass(gfx.imgui_render_pass, None);
+                device.destroy_framebuffer(gfx.imgui_framebuffer, None);
+            }
+        }
+    }
+
+    pub fn create_graphics_resources(&mut self) {
+        use crate::vulkan::*;
+        assert!(self.gfx.is_none());
+
         let imgui_render_pass = crate::gui::create_imgui_render_pass(vk_device());
         let (imgui_framebuffer, imgui_texture) =
             crate::gui::create_imgui_framebuffer(vk_device(), imgui_render_pass);
 
-        Self {
-            imgui_platform,
-            imgui_renderer,
+        let gfx = GfxResources {
             imgui_render_pass,
             imgui_framebuffer,
             imgui_texture,
-        }
+        };
+
+        self.imgui_renderer
+            .create_pipeline(vk_device(), gfx.imgui_render_pass);
+
+        self.gfx = Some(gfx);
     }
 
     pub fn handle_event(
@@ -92,75 +127,80 @@ impl ImGuiBackend {
         imgui.frame()
     }
 
+    // TODO: Result
     pub fn render(
         &mut self,
         window: &winit::Window,
         ui: imgui::Ui,
         cb: vk::CommandBuffer,
-    ) -> vk::ImageView {
-        use crate::vulkan::*;
+    ) -> Option<vk::ImageView> {
+        match self.gfx {
+            Some(ref gfx) => {
+                use crate::vulkan::*;
 
-        self.imgui_platform.prepare_render(&ui, window);
-        let draw_data = ui.render();
+                self.imgui_platform.prepare_render(&ui, window);
+                let draw_data = ui.render();
 
-        if !self.imgui_renderer.has_pipeline() {
-            self.imgui_renderer
-                .create_pipeline(vk_device(), self.imgui_render_pass);
-        }
-
-        unsafe { vk_all() }.record_image_barrier(
-            cb,
-            ImageBarrier::new(
-                self.imgui_texture.image,
-                vk_sync::AccessType::Nothing,
-                vk_sync::AccessType::ColorAttachmentWrite,
-            )
-            .with_discard(true),
-        );
-
-        self.imgui_renderer.begin_frame(vk_device(), cb);
-
-        {
-            let clear_values = [vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 0.0],
-                },
-            }];
-
-            let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
-                .render_pass(self.imgui_render_pass)
-                .framebuffer(self.imgui_framebuffer)
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: unsafe { vk_all() }.surface_resolution,
-                })
-                .clear_values(&clear_values);
-
-            unsafe {
-                vk_device().cmd_begin_render_pass(
+                unsafe { vk_all() }.record_image_barrier(
                     cb,
-                    &render_pass_begin_info,
-                    vk::SubpassContents::INLINE,
+                    ImageBarrier::new(
+                        gfx.imgui_texture.image,
+                        vk_sync::AccessType::Nothing,
+                        vk_sync::AccessType::ColorAttachmentWrite,
+                    )
+                    .with_discard(true),
                 );
+
+                self.imgui_renderer.begin_frame(vk_device(), cb);
+
+                {
+                    let clear_values = [vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 0.0],
+                        },
+                    }];
+
+                    let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
+                        .render_pass(gfx.imgui_render_pass)
+                        .framebuffer(gfx.imgui_framebuffer)
+                        .render_area(vk::Rect2D {
+                            offset: vk::Offset2D { x: 0, y: 0 },
+                            extent: unsafe { vk_all() }
+                                .swapchain
+                                .as_ref()
+                                .unwrap()
+                                .surface_resolution,
+                        })
+                        .clear_values(&clear_values);
+
+                    unsafe {
+                        vk_device().cmd_begin_render_pass(
+                            cb,
+                            &render_pass_begin_info,
+                            vk::SubpassContents::INLINE,
+                        );
+                    }
+                }
+
+                self.imgui_renderer.render(&draw_data, vk_device(), cb);
+
+                unsafe {
+                    vk_device().cmd_end_render_pass(cb);
+                }
+
+                unsafe { vk_all() }.record_image_barrier(
+                    cb,
+                    ImageBarrier::new(
+                        gfx.imgui_texture.image,
+                        vk_sync::AccessType::ColorAttachmentWrite,
+                        vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
+                    ),
+                );
+
+                Some(gfx.imgui_texture.view)
             }
+            None => None,
         }
-
-        self.imgui_renderer.render(&draw_data, vk_device(), cb);
-
-        unsafe {
-            vk_device().cmd_end_render_pass(cb);
-        }
-
-        unsafe { vk_all() }.record_image_barrier(
-            cb,
-            ImageBarrier::new(
-                self.imgui_texture.image,
-                vk_sync::AccessType::ColorAttachmentWrite,
-                vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
-            ),
-        );
-
-        self.imgui_texture.view
     }
 }
 
@@ -209,7 +249,11 @@ pub fn create_imgui_framebuffer(
     device: &ash::Device,
     render_pass: vk::RenderPass,
 ) -> (vk::Framebuffer, Texture) {
-    let surface_resolution = unsafe { crate::vulkan::vk_all() }.surface_resolution;
+    let surface_resolution = unsafe { crate::vulkan::vk_all() }
+        .swapchain
+        .as_ref()
+        .unwrap()
+        .surface_resolution;
     let tex = crate::backend::texture::create_texture(TextureKey::new(
         surface_resolution.width,
         surface_resolution.height,

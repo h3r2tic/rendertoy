@@ -552,6 +552,13 @@ impl Renderer {
         self.pipeline.replace(pipeline)
     }
 
+    pub fn destroy_pipeline(&mut self, device: &Device) {
+        let pipeline = self.pipeline.take().unwrap();
+        unsafe {
+            device.destroy_pipeline(pipeline, None);
+        }
+    }
+
     pub fn render(
         &mut self,
         draw_data: &DrawData,

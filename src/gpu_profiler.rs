@@ -23,6 +23,11 @@ pub fn report_durations_ticks(durations: impl Iterator<Item = (GpuProfilerQueryI
     prof.report_durations_ticks(durations);
 }
 
+pub fn forget_queries(queries: impl Iterator<Item = GpuProfilerQueryId>) {
+    let mut prof = GPU_PROFILER.lock().unwrap();
+    prof.forget_queries(queries);
+}
+
 pub fn end_frame(gfx: &crate::Gfx) {
     let mut prof = GPU_PROFILER.lock().unwrap();
     prof.end_frame(gfx);
@@ -131,6 +136,12 @@ impl GpuProfiler {
             let q = self.active_queries.remove(&query_id).unwrap();
             let duration = (duration_ticks as f64 * ns_per_tick as f64) as u64;
             self.stats.report_duration_nanos(query_id, duration, q.name);
+        }
+    }
+
+    fn forget_queries(&mut self, queries: impl Iterator<Item = GpuProfilerQueryId>) {
+        for query_id in queries {
+            let q = self.active_queries.remove(&query_id).unwrap();
         }
     }
 
