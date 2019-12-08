@@ -195,7 +195,7 @@ impl Rendertoy {
             .expect("window");
 
         crate::vulkan::initialize_vk_state(
-            VkKitchenSink::new(&window, cfg.graphics_debugging).unwrap(),
+            VkKitchenSink::new(&window, cfg.graphics_debugging, cfg.vsync).unwrap(),
         );
 
         let mut imgui = imgui::Context::create();
@@ -283,6 +283,8 @@ impl Rendertoy {
             let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
             let mut new_mouse_state = self.mouse_state.clone();
 
+            let gui_want_capture_mouse = self.imgui.io().want_capture_mouse;
+
             for event in events.iter() {
                 #[allow(clippy::single_match)]
                 match event {
@@ -306,12 +308,14 @@ impl Rendertoy {
                             position: logical_pos,
                             device_id: _,
                             modifiers: _,
-                        } => {
+                        } if !gui_want_capture_mouse => {
                             let dpi_factor = self.window.get_hidpi_factor();
                             let pos = logical_pos.to_physical(dpi_factor);
                             new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
                         }
-                        winit::WindowEvent::MouseInput { state, button, .. } => {
+                        winit::WindowEvent::MouseInput { state, button, .. }
+                            if !gui_want_capture_mouse =>
+                        {
                             let button_id = match button {
                                 winit::MouseButton::Left => 0,
                                 winit::MouseButton::Middle => 1,

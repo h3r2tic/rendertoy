@@ -189,9 +189,11 @@ pub struct VkKitchenSink {
 
     pub allocator: vk_mem::Allocator,
     pub bindless_buffers_descriptor_set: vk::DescriptorSet,
-    pub bindless_buffers_next_descriptor: std::sync::atomic::AtomicU32,
     pub bindless_images_descriptor_set: vk::DescriptorSet,
-    pub bindless_images_next_descriptor: std::sync::atomic::AtomicU32,
+
+    // TODO: Those also guard updates to the descriptor sets
+    pub bindless_buffers_next_descriptor: Mutex<u32>,
+    pub bindless_images_next_descriptor: Mutex<u32>,
 
     pub frame_data: Vec<VkFrameData>,
 
@@ -296,7 +298,11 @@ fn allocate_frame_command_buffer(
 }
 
 impl VkKitchenSink {
-    pub fn new(window: &winit::Window, graphics_debugging: bool) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        window: &winit::Window,
+        graphics_debugging: bool,
+        vsync: bool,
+    ) -> Result<Self, Box<dyn Error>> {
         unsafe {
             let entry = ash::Entry::new()?;
             let surface_extensions = ash_window::enumerate_required_extensions(window)?;
@@ -494,10 +500,15 @@ impl VkKitchenSink {
             let present_modes = surface_loader
                 .get_physical_device_surface_present_modes(pdevice, surface)
                 .unwrap();
+            let desired_present_mode = if vsync {
+                vk::PresentModeKHR::FIFO_RELAXED
+            } else {
+                vk::PresentModeKHR::MAILBOX
+            };
             let present_mode = present_modes
                 .iter()
                 .cloned()
-                .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
+                .find(|&mode| mode == desired_present_mode)
                 .unwrap_or(vk::PresentModeKHR::FIFO);
             let swapchain_loader = Swapchain::new(&instance, &device);
 
@@ -706,9 +717,9 @@ impl VkKitchenSink {
                 surface,
                 allocator,
                 bindless_buffers_descriptor_set,
-                bindless_buffers_next_descriptor: std::sync::atomic::AtomicU32::new(0),
+                bindless_buffers_next_descriptor: Mutex::new(0),
                 bindless_images_descriptor_set,
-                bindless_images_next_descriptor: std::sync::atomic::AtomicU32::new(0),
+                bindless_images_next_descriptor: Mutex::new(0),
                 debug_call_back,
                 debug_report_loader,
                 window_width: physical_dimensions.width as u32,
@@ -720,9 +731,10 @@ impl VkKitchenSink {
     }
 
     pub(crate) fn register_image_bindless_index(&self, view: vk::ImageView) -> u32 {
-        let idx = self
-            .bindless_images_next_descriptor
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut next = self.bindless_images_next_descriptor.lock().unwrap();
+
+        let idx = *next;
+        *next += 1;
 
         unsafe {
             self.device.update_descriptor_sets(
@@ -744,9 +756,10 @@ impl VkKitchenSink {
     }
 
     pub(crate) fn register_buffer_bindless_index(&self, view: vk::BufferView) -> u32 {
-        let idx = self
-            .bindless_buffers_next_descriptor
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut next = self.bindless_buffers_next_descriptor.lock().unwrap();
+
+        let idx = *next;
+        *next += 1;
 
         unsafe {
             self.device.update_descriptor_sets(
