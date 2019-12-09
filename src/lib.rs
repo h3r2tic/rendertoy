@@ -15,7 +15,6 @@ mod mesh;
 mod package;
 mod rgb9e5;
 mod shader;
-mod switchable_graphics;
 mod texture;
 mod viewport;
 mod vulkan;
@@ -388,7 +387,6 @@ impl Rendertoy {
             }
         }
 
-        // TODO: proper time
         self.keyboard.update(keyboard_events, self.dt);
         self.mouse_state.update(&new_mouse_state);
 

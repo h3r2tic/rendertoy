@@ -1422,7 +1422,7 @@ impl TrackedUniformParamSource {
             });
 
         for name in unreferenced {
-            crate::rtoy_show_warning(format!("Unreferenced uniform {}: {}", shader_name, name));
+            crate::rtoy_show_warning(format!("Unreferenced uniform {}::{}", shader_name, name));
         }
     }
 }
