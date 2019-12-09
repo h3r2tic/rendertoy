@@ -31,7 +31,7 @@ void main(in uint2 dispatch_id : SV_DispatchThreadID) {
         0);
     float4 gui = gui_tex.Load(uint3(dispatch_id, 0));
     float4 result = main;
-    result.rgb = linear_to_srgb(result.rgb);
+    result.rgb = linear_to_srgb(clamp(result.rgb, 0.0, 1.0));
     result.rgb = result.rgb * (1.0 - gui.a) + gui.rgb;
     output_tex[dispatch_id] = result;
 }
