@@ -9,7 +9,7 @@ use relative_path::{RelativePath, RelativePathBuf};
 use shader_prepper;
 use snoozy::futures::future::{try_join_all, BoxFuture, FutureExt};
 use snoozy::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 macro_rules! def_shader_uniform_types {
     (@resolved_type SnoozyRef<ShaderUniformBundle>) => {
@@ -136,7 +136,7 @@ impl Hash for ShaderUniformHolder {
 
 pub struct ResolvedShaderUniformHolder {
     name: String,
-    value: ResolvedShaderUniformValue,
+    payload: ResolvedShaderUniformPayload,
 }
 
 impl ShaderUniformHolder {
@@ -159,7 +159,10 @@ impl ShaderUniformHolder {
     pub async fn resolve(&self, ctx: Context) -> Result<ResolvedShaderUniformHolder> {
         Ok(ResolvedShaderUniformHolder {
             name: self.name.clone(),
-            value: self.value.resolve(ctx.clone()).await?,
+            payload: ResolvedShaderUniformPayload {
+                value: self.value.resolve(ctx.clone()).await?,
+                warn_if_unreferenced: true,
+            },
         })
     }
 }
@@ -1009,7 +1012,7 @@ pub async fn make_raster_pipeline(
 pub enum FlattenedUniformEvent {
     SetUniform {
         name: String,
-        value: ResolvedShaderUniformValue,
+        payload: ResolvedShaderUniformPayload,
     },
     EnterScope,
     LeaveScope,
@@ -1021,7 +1024,9 @@ fn flatten_uniforms(
 ) {
     // Do non-bundle values first so that they become visible to bundle handlers
     for uniform in uniforms.iter_mut() {
-        match uniform.value {
+        let warn_if_unreferenced = uniform.payload.warn_if_unreferenced;
+
+        match uniform.payload.value {
             ResolvedShaderUniformValue::Bundle(_) => {}
             ResolvedShaderUniformValue::Texture(ref value)
             | ResolvedShaderUniformValue::RwTexture(ref value) => {
@@ -1036,17 +1041,26 @@ fn flatten_uniforms(
 
                 sink(FlattenedUniformEvent::SetUniform {
                     name: name.clone() + "_size",
-                    value: ResolvedShaderUniformValue::Vec4(tex_size_uniform),
+                    payload: ResolvedShaderUniformPayload {
+                        value: ResolvedShaderUniformValue::Vec4(tex_size_uniform),
+                        warn_if_unreferenced: false,
+                    },
                 });
 
                 sink(FlattenedUniformEvent::SetUniform {
                     name,
-                    value: match &uniform.value {
+                    payload: match &uniform.payload.value {
                         ResolvedShaderUniformValue::Texture(ref value) => {
-                            ResolvedShaderUniformValue::Texture(value.clone())
+                            ResolvedShaderUniformPayload {
+                                value: ResolvedShaderUniformValue::Texture(value.clone()),
+                                warn_if_unreferenced,
+                            }
                         }
                         ResolvedShaderUniformValue::RwTexture(ref value) => {
-                            ResolvedShaderUniformValue::RwTexture(value.clone())
+                            ResolvedShaderUniformPayload {
+                                value: ResolvedShaderUniformValue::RwTexture(value.clone()),
+                                warn_if_unreferenced,
+                            }
                         }
                         _ => panic!(),
                     },
@@ -1054,17 +1068,25 @@ fn flatten_uniforms(
             }
             _ => {
                 let name = std::mem::replace(&mut uniform.name, String::new());
-                let value =
-                    std::mem::replace(&mut uniform.value, ResolvedShaderUniformValue::Int32(0));
+                let value = std::mem::replace(
+                    &mut uniform.payload.value,
+                    ResolvedShaderUniformValue::Int32(0),
+                );
 
-                sink(FlattenedUniformEvent::SetUniform { name, value });
+                sink(FlattenedUniformEvent::SetUniform {
+                    name,
+                    payload: ResolvedShaderUniformPayload {
+                        value,
+                        warn_if_unreferenced,
+                    },
+                });
             }
         }
     }
 
     // Now process bundles
     for uniform in uniforms.into_iter() {
-        match uniform.value {
+        match uniform.payload.value {
             ResolvedShaderUniformValue::Bundle(bundle) => {
                 sink(FlattenedUniformEvent::EnterScope);
                 flatten_uniforms(bundle, sink);
@@ -1085,12 +1107,6 @@ trait DescriptorSetSlice {
     fn get_at_idx(&self, idx: usize) -> std::result::Result<vk::DescriptorSet, &'static str>;
 }
 
-/*impl DescriptorSetSlice for Vec<vk::DescriptorSet> {
-    fn get_at_idx(&self, idx: usize) -> std::result::Result<vk::DescriptorSet, &'static str> {
-        Ok(self[idx])
-    }
-}*/
-
 impl DescriptorSetSlice for Vec<Option<vk::DescriptorSet>> {
     fn get_at_idx(&self, idx: usize) -> std::result::Result<vk::DescriptorSet, &'static str> {
         match self[idx] {
@@ -1100,11 +1116,16 @@ impl DescriptorSetSlice for Vec<Option<vk::DescriptorSet>> {
     }
 }
 
+trait UniformParamSource {
+    fn len(&self) -> usize;
+    fn get(&mut self, name: &str) -> Option<&ResolvedShaderUniformValue>;
+}
+
 fn update_descriptor_sets<'a>(
     device: &Device,
     refl: impl Iterator<Item = &'a spirv_reflect::ShaderModule>,
     descriptor_sets: &impl DescriptorSetSlice,
-    uniforms: &HashMap<String, ResolvedShaderUniformValue>,
+    uniforms: &mut impl UniformParamSource,
 ) -> std::result::Result<DescritorSetUpdateResult, &'static str> {
     use std::cell::RefCell;
 
@@ -1363,6 +1384,49 @@ fn update_descriptor_sets<'a>(
     })
 }
 
+pub struct ResolvedShaderUniformPayload {
+    value: ResolvedShaderUniformValue,
+    warn_if_unreferenced: bool,
+}
+
+// Provide access to uniforms, but also record which ones are being requested,
+// so that we can issue warnings about any unreferenced ones.
+struct TrackedUniformParamSource {
+    uniforms: HashMap<String, ResolvedShaderUniformPayload>,
+    requested: HashSet<String>,
+}
+
+impl UniformParamSource for TrackedUniformParamSource {
+    fn len(&self) -> usize {
+        self.uniforms.len()
+    }
+
+    fn get(&mut self, name: &str) -> Option<&ResolvedShaderUniformValue> {
+        self.requested.insert(name.to_owned());
+        self.uniforms.get(name).map(|v| &v.value)
+    }
+}
+
+impl TrackedUniformParamSource {
+    fn report_unreferenced_uniform_warnings(self, shader_name: &str) {
+        let requested = self.requested;
+        let unreferenced = self
+            .uniforms
+            .into_iter()
+            .filter_map(move |(name, payload)| {
+                if !payload.warn_if_unreferenced || requested.contains(&name) {
+                    None
+                } else {
+                    Some(name)
+                }
+            });
+
+        for name in unreferenced {
+            crate::rtoy_show_warning(format!("Unreferenced uniform {}: {}", shader_name, name));
+        }
+    }
+}
+
 #[snoozy]
 pub async fn compute_tex(
     ctx: Context,
@@ -1377,18 +1441,26 @@ pub async fn compute_tex(
     let mut uniforms = resolve(ctx, uniforms.clone()).await?;
     uniforms.push(ResolvedShaderUniformHolder {
         name: "outputTex".to_owned(),
-        value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+        payload: ResolvedShaderUniformPayload {
+            value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+            warn_if_unreferenced: true,
+        },
     });
 
     let device = vk_device();
     let vk_frame = unsafe { vk_frame() };
 
-    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
+    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformPayload> = HashMap::new();
     flatten_uniforms(uniforms, &mut |e| {
-        if let FlattenedUniformEvent::SetUniform { name, value } = e {
-            flattened_uniforms.insert(name, value);
+        if let FlattenedUniformEvent::SetUniform { name, payload } = e {
+            flattened_uniforms.insert(name, payload);
         }
     });
+
+    let mut uniform_source = TrackedUniformParamSource {
+        uniforms: flattened_uniforms,
+        requested: HashSet::new(),
+    };
 
     let (descriptor_sets, ds_update_result) = unsafe {
         let descriptor_sets = {
@@ -1414,7 +1486,7 @@ pub async fn compute_tex(
             device,
             std::iter::once(&cs.spirv_reflection),
             &descriptor_sets,
-            &flattened_uniforms,
+            &mut uniform_source,
         )
         .unwrap();
 
@@ -1491,12 +1563,8 @@ pub async fn compute_tex(
         );
     }
 
-    /*for warning in uniform_plumber.warnings.iter() {
-        crate::rtoy_show_warning(format!("{}: {}", cs.name, warning));
-    }*/
-
+    uniform_source.report_unreferenced_uniform_warnings(&cs.name);
     gpu_debugger::report_texture(&cs.name, output_tex.view);
-    //dbg!(output_tex.texture_id);
 
     Ok(output_tex)
 }
@@ -1514,7 +1582,10 @@ pub async fn raster_tex(
     let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
     uniforms.push(ResolvedShaderUniformHolder {
         name: "outputTex".to_owned(),
-        value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+        payload: ResolvedShaderUniformPayload {
+            value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+            warn_if_unreferenced: false,
+        },
     });
 
     //println!("---- raster_tex: ----");
@@ -1599,91 +1670,89 @@ pub async fn raster_tex(
         device.cmd_begin_render_pass(cb, &pass_begin_desc, vk::SubpassContents::INLINE);
     }
 
-    let flush_draw =
-        |flattened_uniforms: &HashMap<String, ResolvedShaderUniformValue>| -> Result<()> {
-            unsafe {
-                let (descriptor_sets, ds_update_result) = {
-                    let descriptor_sets = {
-                        let layout_info = &raster_pipe.descriptor_set_layout_info;
-                        let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
-                        let dynamic_sets = device.allocate_descriptor_sets(
-                            &vk::DescriptorSetAllocateInfo::builder()
-                                .descriptor_pool(*descriptor_pool)
-                                .set_layouts(&layout_info.dynamic_layouts)
-                                .build(),
-                        )?;
-                        drop(descriptor_pool);
+    let flush_draw = |uniform_source: &mut TrackedUniformParamSource| -> Result<()> {
+        unsafe {
+            let (descriptor_sets, ds_update_result) = {
+                let descriptor_sets = {
+                    let layout_info = &raster_pipe.descriptor_set_layout_info;
+                    let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
+                    let dynamic_sets = device.allocate_descriptor_sets(
+                        &vk::DescriptorSetAllocateInfo::builder()
+                            .descriptor_pool(*descriptor_pool)
+                            .set_layouts(&layout_info.dynamic_layouts)
+                            .build(),
+                    )?;
+                    drop(descriptor_pool);
 
-                        let mut sets = vec![None; layout_info.all_layouts.len()];
-                        for (src, dst) in layout_info.dynamic_layout_indices.iter().enumerate() {
-                            sets[*dst] = Some(dynamic_sets[src]);
-                        }
+                    let mut sets = vec![None; layout_info.all_layouts.len()];
+                    for (src, dst) in layout_info.dynamic_layout_indices.iter().enumerate() {
+                        sets[*dst] = Some(dynamic_sets[src]);
+                    }
 
-                        sets
-                    };
-
-                    let ds_update_result = update_descriptor_sets(
-                        device,
-                        raster_pipe.shader_refl.iter(),
-                        &descriptor_sets,
-                        &flattened_uniforms,
-                    )
-                    .unwrap();
-
-                    (descriptor_sets, ds_update_result)
+                    sets
                 };
 
-                let mut descriptor_sets = descriptor_sets;
-
-                for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-                    descriptor_sets[*idx] = Some(vk_all.bindless_buffers_descriptor_set);
-                }
-
-                for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-                    descriptor_sets[*idx] = Some(vk_all.bindless_images_descriptor_set);
-                }
-
-                let descriptor_sets: Vec<_> =
-                    descriptor_sets.into_iter().map(Option::unwrap).collect();
-
-                device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
-
-                device.cmd_set_viewport(
-                    cb,
-                    0,
-                    &[vk::Viewport {
-                        x: 0.0,
-                        y: (key.height as f32),
-                        width: key.width as _,
-                        height: -(key.height as f32),
-                        min_depth: 0.0,
-                        max_depth: 1.0,
-                    }],
-                );
-                device.cmd_set_scissor(
-                    cb,
-                    0,
-                    &[vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                        extent: vk::Extent2D {
-                            width: key.width as _,
-                            height: key.height as _,
-                        },
-                    }],
-                );
-
-                device.cmd_bind_descriptor_sets(
-                    cb,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    raster_pipe.pipeline_layout,
-                    0,
+                let ds_update_result = update_descriptor_sets(
+                    device,
+                    raster_pipe.shader_refl.iter(),
                     &descriptor_sets,
-                    &ds_update_result.dynamic_offsets,
-                );
+                    uniform_source,
+                )
+                .unwrap();
 
-                Ok(())
+                (descriptor_sets, ds_update_result)
+            };
+
+            let mut descriptor_sets = descriptor_sets;
+
+            for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
+                descriptor_sets[*idx] = Some(vk_all.bindless_buffers_descriptor_set);
             }
-        };
+
+            for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
+                descriptor_sets[*idx] = Some(vk_all.bindless_images_descriptor_set);
+            }
+
+            let descriptor_sets: Vec<_> = descriptor_sets.into_iter().map(Option::unwrap).collect();
+
+            device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
+
+            device.cmd_set_viewport(
+                cb,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: (key.height as f32),
+                    width: key.width as _,
+                    height: -(key.height as f32),
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+            device.cmd_set_scissor(
+                cb,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: vk::Extent2D {
+                        width: key.width as _,
+                        height: key.height as _,
+                    },
+                }],
+            );
+
+            device.cmd_bind_descriptor_sets(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                raster_pipe.pipeline_layout,
+                0,
+                &descriptor_sets,
+                &ds_update_result.dynamic_offsets,
+            );
+
+            Ok(())
+        }
+    };
 
     #[derive(Default)]
     struct MeshDrawData {
@@ -1693,20 +1762,27 @@ pub async fn raster_tex(
 
     let mut mesh_stack = vec![MeshDrawData::default()];
 
-    let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformValue> = HashMap::new();
+    let flattened_uniforms: HashMap<String, ResolvedShaderUniformPayload> = HashMap::new();
+    let mut uniform_source = TrackedUniformParamSource {
+        uniforms: flattened_uniforms,
+        requested: HashSet::new(),
+    };
+
     flatten_uniforms(uniforms, &mut |e| match e {
-        FlattenedUniformEvent::SetUniform { name, value } => {
-            match value {
+        FlattenedUniformEvent::SetUniform { name, mut payload } => {
+            match payload.value {
                 ResolvedShaderUniformValue::Buffer(ref buf) if name == "mesh_index_buf" => {
                     mesh_stack.last_mut().unwrap().index_buffer = Some(buf.buffer);
+                    payload.warn_if_unreferenced = false;
                 }
                 ResolvedShaderUniformValue::Uint32(value) if name == "mesh_index_count" => {
                     mesh_stack.last_mut().unwrap().index_count = Some(value);
+                    payload.warn_if_unreferenced = false;
                 }
                 _ => {}
             }
 
-            flattened_uniforms.insert(name, value);
+            uniform_source.uniforms.insert(name, payload);
         }
         FlattenedUniformEvent::EnterScope => {
             mesh_stack.push(Default::default());
@@ -1716,7 +1792,7 @@ pub async fn raster_tex(
             if let Some(index_count) = mesh.index_count {
                 if let Some(index_buffer) = mesh.index_buffer {
                     unsafe {
-                        flush_draw(&flattened_uniforms).expect("flush_draw");
+                        flush_draw(&mut uniform_source).expect("flush_draw");
                         device.cmd_bind_index_buffer(cb, index_buffer, 0, vk::IndexType::UINT32);
                         device.cmd_draw_indexed(cb, index_count as _, 1, 0, 0, 0);
                         //println!("-------");
@@ -1738,6 +1814,9 @@ pub async fn raster_tex(
             ),
         );
     };
+
+    uniform_source.report_unreferenced_uniform_warnings("mesh_raster");
+    gpu_debugger::report_texture("mesh_raster", output_tex.view);
 
     Ok(output_tex)
 }
