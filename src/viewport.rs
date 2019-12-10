@@ -63,7 +63,7 @@ impl VieportConstantBuilder {
         self
     }
 
-    pub fn finish(self) -> ViewConstants {
+    pub fn build(self) -> ViewConstants {
         let view_to_clip = self.camera_matrices.view_to_clip;
         let clip_to_view = self.camera_matrices.clip_to_view;
 
