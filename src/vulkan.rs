@@ -892,7 +892,8 @@ impl VkKitchenSink {
                 let cb: vk::CommandBuffer = cb.cb;
 
                 {
-                    vk_all.record_image_aspect_barrier(
+                    record_image_aspect_barrier(
+                        &vk_all.device,
                         cb,
                         vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
                         ImageBarrier::new(
@@ -1131,67 +1132,67 @@ impl VkKitchenSink {
             descriptor_sets[0]
         }
     }
+}
 
-    pub fn record_image_barrier(&self, cb: vk::CommandBuffer, barrier: ImageBarrier) {
-        let range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
+pub fn record_image_barrier(device: &Device, cb: vk::CommandBuffer, barrier: ImageBarrier) {
+    let range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
 
-        vk_sync::cmd::pipeline_barrier(
-            self.device.fp_v1_0(),
-            cb,
-            None,
-            &[],
-            &[vk_sync::ImageBarrier {
-                previous_accesses: &[barrier.prev_access],
-                next_accesses: &[barrier.next_access],
-                previous_layout: vk_sync::ImageLayout::Optimal,
-                next_layout: vk_sync::ImageLayout::Optimal,
-                discard_contents: barrier.discard,
-                src_queue_family_index: 0,
-                dst_queue_family_index: 0,
-                image: barrier.image,
-                range,
-            }],
-        );
-    }
+    vk_sync::cmd::pipeline_barrier(
+        device.fp_v1_0(),
+        cb,
+        None,
+        &[],
+        &[vk_sync::ImageBarrier {
+            previous_accesses: &[barrier.prev_access],
+            next_accesses: &[barrier.next_access],
+            previous_layout: vk_sync::ImageLayout::Optimal,
+            next_layout: vk_sync::ImageLayout::Optimal,
+            discard_contents: barrier.discard,
+            src_queue_family_index: 0,
+            dst_queue_family_index: 0,
+            image: barrier.image,
+            range,
+        }],
+    );
+}
 
-    pub fn record_image_aspect_barrier(
-        &self,
-        cb: vk::CommandBuffer,
-        aspect_mask: vk::ImageAspectFlags,
-        barrier: ImageBarrier,
-    ) {
-        let range = vk::ImageSubresourceRange {
-            aspect_mask,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
+pub fn record_image_aspect_barrier(
+    device: &Device,
+    cb: vk::CommandBuffer,
+    aspect_mask: vk::ImageAspectFlags,
+    barrier: ImageBarrier,
+) {
+    let range = vk::ImageSubresourceRange {
+        aspect_mask,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
 
-        vk_sync::cmd::pipeline_barrier(
-            self.device.fp_v1_0(),
-            cb,
-            None,
-            &[],
-            &[vk_sync::ImageBarrier {
-                previous_accesses: &[barrier.prev_access],
-                next_accesses: &[barrier.next_access],
-                previous_layout: vk_sync::ImageLayout::Optimal,
-                next_layout: vk_sync::ImageLayout::Optimal,
-                discard_contents: barrier.discard,
-                src_queue_family_index: 0,
-                dst_queue_family_index: 0,
-                image: barrier.image,
-                range,
-            }],
-        );
-    }
+    vk_sync::cmd::pipeline_barrier(
+        device.fp_v1_0(),
+        cb,
+        None,
+        &[],
+        &[vk_sync::ImageBarrier {
+            previous_accesses: &[barrier.prev_access],
+            next_accesses: &[barrier.next_access],
+            previous_layout: vk_sync::ImageLayout::Optimal,
+            next_layout: vk_sync::ImageLayout::Optimal,
+            discard_contents: barrier.discard,
+            src_queue_family_index: 0,
+            dst_queue_family_index: 0,
+            image: barrier.image,
+            range,
+        }],
+    );
 }
 
 impl Drop for VkKitchenSink {

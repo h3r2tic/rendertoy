@@ -1497,7 +1497,8 @@ pub async fn compute_tex(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        vk_all().record_image_barrier(
+        record_image_barrier(
+            vk_device(),
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1553,7 +1554,8 @@ pub async fn compute_tex(
             vk_query_idx * 2 + 1,
         );
 
-        vk_all().record_image_barrier(
+        record_image_barrier(
+            vk_device(),
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1598,7 +1600,8 @@ pub async fn raster_tex(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        vk_all.record_image_barrier(
+        record_image_barrier(
+            vk_device(),
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1805,7 +1808,8 @@ pub async fn raster_tex(
     unsafe {
         device.cmd_end_render_pass(cb);
 
-        vk_all.record_image_barrier(
+        record_image_barrier(
+            vk_device(),
             cb,
             ImageBarrier::new(
                 output_tex.image,

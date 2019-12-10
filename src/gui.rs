@@ -141,7 +141,8 @@ impl ImGuiBackend {
                 self.imgui_platform.prepare_render(&ui, window);
                 let draw_data = ui.render();
 
-                unsafe { vk_all() }.record_image_barrier(
+                record_image_barrier(
+                    vk_device(),
                     cb,
                     ImageBarrier::new(
                         gfx.imgui_texture.image,
@@ -188,7 +189,8 @@ impl ImGuiBackend {
                     vk_device().cmd_end_render_pass(cb);
                 }
 
-                unsafe { vk_all() }.record_image_barrier(
+                record_image_barrier(
+                    vk_device(),
                     cb,
                     ImageBarrier::new(
                         gfx.imgui_texture.image,

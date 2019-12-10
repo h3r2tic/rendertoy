@@ -626,7 +626,8 @@ impl Rendertoy {
             |_device| {
                 let present_image = swapchain.present_images[vk_frame_index()];
 
-                vk.record_image_barrier(
+                record_image_barrier(
+                    &vk.device,
                     cb,
                     ImageBarrier::new(
                         present_image,
@@ -761,7 +762,8 @@ impl Rendertoy {
                     );
                 }
 
-                vk.record_image_barrier(
+                record_image_barrier(
+                    &vk.device,
                     cb,
                     ImageBarrier::new(
                         present_image,

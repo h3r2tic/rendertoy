@@ -17,12 +17,11 @@ pub async fn upload_buffer<T: Sized + Copy + Send + Sync + 'static>(
 }
 
 use std::ops::Deref;
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
 pub struct ArcView<T, OwnerT> {
-    owner: Pin<Arc<OwnerT>>,
+    owner: Arc<OwnerT>,
     child: NonNull<T>,
 }
 
@@ -30,9 +29,9 @@ unsafe impl<T, OwnerT> Send for ArcView<T, OwnerT> {}
 unsafe impl<T, OwnerT> Sync for ArcView<T, OwnerT> {}
 
 impl<T: 'static, OwnerT> ArcView<T, OwnerT> {
-    pub fn new<'a, F>(owner: &'a Pin<Arc<OwnerT>>, get_member: F) -> Self
+    pub fn new<'a, F>(owner: &'a Arc<OwnerT>, get_member: F) -> Self
     where
-        F: for<'b> FnOnce(&'b Pin<Arc<OwnerT>>) -> &'b T,
+        F: for<'b> FnOnce(&'b Arc<OwnerT>) -> &'b T,
     {
         let owner = owner.clone();
         let child = NonNull::new(get_member(&owner) as *const T as *mut T).unwrap();

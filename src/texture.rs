@@ -102,7 +102,7 @@ fn load_tex_impl(
     });
 
     let res_image = res.image;
-    vk_add_setup_command(move |vk_all, vk_frame| {
+    vk_add_setup_command(move |_vk_all, vk_frame| {
         vk_frame
             .frame_cleanup
             .lock()
@@ -117,7 +117,8 @@ fn load_tex_impl(
         let cb = vk_frame.command_buffer.lock().unwrap();
         let cb: vk::CommandBuffer = cb.cb;
 
-        vk_all.record_image_barrier(
+        record_image_barrier(
+            vk_device(),
             cb,
             ImageBarrier::new(
                 res_image,
@@ -149,7 +150,8 @@ fn load_tex_impl(
                 &[buffer_copy_regions.build()],
             );
 
-            vk_all.record_image_barrier(
+            record_image_barrier(
+                vk_device(),
                 cb,
                 ImageBarrier::new(
                     res_image,
