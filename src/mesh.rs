@@ -14,7 +14,7 @@ pub struct MeshMaterial {
     pub emissive: [f32; 3],
 }
 
-#[derive(Abomonation, Default)]
+#[derive(Abomonation, Clone, Default)]
 pub struct TriangleMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -115,7 +115,7 @@ fn load_gltf_material(
     )
 }
 
-#[snoozy]
+#[snoozy(cache)]
 pub async fn load_gltf_scene(ctx: Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
     let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx).await?)?;
 

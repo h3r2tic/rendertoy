@@ -12,7 +12,7 @@ pub enum TexGamma {
     Srgb,
 }
 
-#[derive(Serialize, Debug, Clone, Abomonation)]
+#[derive(Serialize, Debug, Clone, Copy, Abomonation)]
 pub struct TexParams {
     pub gamma: TexGamma,
 }
@@ -30,23 +30,38 @@ pub async fn load_tex(ctx: Context, path: &AssetPath) -> Result<Texture> {
     Ok((*tex).clone())
 }
 
-fn load_ldr_tex(blob: &Blob, params: &TexParams) -> Result<Texture> {
+#[derive(Abomonation, Clone)]
+pub struct RawRgba8Image {
+    data: Vec<u8>,
+    dimensions: (u32, u32),
+}
+
+#[snoozy(cache)]
+pub async fn load_raw_ldr_tex(ctx: Context, path: &AssetPath) -> Result<RawRgba8Image> {
     use image::GenericImageView;
 
-    let image = image::load_from_memory(&blob.contents)?;
+    let blob = ctx.get(&load_blob(path.clone())).await?;
+
+    let image = image::load_from_memory(&*blob.contents)?;
     let image_dimensions = image.dimensions();
     tracing::info!("Loaded image: {:?} {:?}", image_dimensions, image.color());
 
-    // TODO: don't
     let image = image.to_rgba();
+
+    Ok(RawRgba8Image {
+        data: image.into_raw(),
+        dimensions: image_dimensions,
+    })
+}
+
+fn load_ldr_tex(image: &RawRgba8Image, params: &TexParams) -> Result<Texture> {
     let internal_format = if params.gamma == TexGamma::Linear {
         vk::Format::R8G8B8A8_UNORM
     } else {
         vk::Format::R8G8B8A8_SRGB
     };
 
-    let image_data = image.into_raw();
-    load_tex_impl(&image_data, image_dimensions, internal_format)
+    load_tex_impl(&image.data, image.dimensions, internal_format)
 }
 
 fn load_tex_impl(
@@ -238,12 +253,12 @@ pub async fn load_tex_with_params(
     path: &AssetPath,
     params: &TexParams,
 ) -> Result<Texture> {
-    let blob = ctx.get(&load_blob(path.clone())).await?;
-
     if path.asset_name.ends_with(".hdr") {
+        let blob = ctx.get(&load_blob(path.clone())).await?;
         load_hdr_tex(&*blob, params)
     } else {
-        load_ldr_tex(&*blob, params)
+        let raw_img = ctx.get(&load_raw_ldr_tex(path.clone())).await?;
+        load_ldr_tex(&*raw_img, params)
     }
 }
 

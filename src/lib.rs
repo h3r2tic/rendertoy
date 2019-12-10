@@ -98,6 +98,8 @@ pub struct Rendertoy {
     swapchain_acquired_semaphore_idx: usize,
     present_descriptor_sets: Vec<vk::DescriptorSet>,
     present_pipeline: shader::ComputePipeline,
+    initialization_instant: std::time::Instant,
+    time_to_first_frame: Option<std::time::Duration>,
 }
 
 #[derive(Clone)]
@@ -228,6 +230,8 @@ impl Rendertoy {
             swapchain_acquired_semaphore_idx: 0,
             present_descriptor_sets,
             present_pipeline,
+            initialization_instant: std::time::Instant::now(),
+            time_to_first_frame: None,
         }
     }
 
@@ -450,6 +454,10 @@ impl Rendertoy {
             })
         };
 
+        if self.time_to_first_frame.is_none() {
+            self.time_to_first_frame = Some(self.initialization_instant.elapsed());
+        }
+
         if self.dump_next_frame_dot_graph {
             self.dump_next_frame_dot_graph = false;
             let dot = generate_dot_graph_from_snoozy_ref(
@@ -482,10 +490,15 @@ impl Rendertoy {
     fn draw_profiling_stats(
         ui: &imgui::Ui,
         average_frame_time: f32,
+        time_to_first_frame: Option<std::time::Duration>,
         stats: &GpuProfilerStats,
         currently_debugged_texture: &Option<String>,
     ) -> Option<String> {
         let mut selected_name = None;
+        if let Some(time_to_first_frame) = time_to_first_frame {
+            ui.text(format!("Time to first frame: {:?}", time_to_first_frame));
+        }
+
         ui.text(format!(
             "CPU frame time: {:.2}ms ({:.1} fps)",
             1000.0 * average_frame_time,
@@ -658,6 +671,7 @@ impl Rendertoy {
                                 self.selected_debug_name = Self::draw_profiling_stats(
                                     &ui,
                                     self.average_frame_time,
+                                    self.time_to_first_frame,
                                     stats,
                                     &currently_debugged_texture,
                                 );
