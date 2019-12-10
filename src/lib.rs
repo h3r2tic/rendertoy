@@ -659,7 +659,7 @@ impl Rendertoy {
                 {
                     if self.show_gui {
                         self.dump_next_frame_dot_graph =
-                            ui.button(im_str!("Save frame.dot dump"), [0.0, 0.0]);
+                            ui.button(im_str!("Dump frame.dot"), [0.0, 0.0]);
                         ui.spacing();
 
                         if ui
