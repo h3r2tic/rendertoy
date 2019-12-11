@@ -239,7 +239,7 @@ impl Rendertoy {
     ) -> (Vec<vk::DescriptorSet>, shader::ComputePipeline) {
         use ash::version::DeviceV1_0;
         use vulkan::*;
-        let vk = unsafe { vk_all() };
+        let vk = vk();
 
         let present_descriptor_set_layout = unsafe {
             vk.device
@@ -562,7 +562,7 @@ impl Rendertoy {
     pub fn draw_forever(mut self, mut callback: impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
         let mut running = true;
         while running {
-            if unsafe { crate::vulkan::vk_all() }.swapchain.is_some() {
+            if crate::vulkan::vk().swapchain.is_some() {
                 self.render_frame(&mut callback);
             } else {
                 self.resize();
@@ -579,7 +579,7 @@ impl Rendertoy {
 
         self.imgui_backend.destroy_graphics_resources();
 
-        if unsafe { crate::vulkan::vk_resize(phys_size.width as u32, phys_size.height as u32) } {
+        if crate::vulkan::vk_resize(phys_size.width as u32, phys_size.height as u32) {
             self.imgui_backend.create_graphics_resources();
         }
     }
@@ -587,61 +587,72 @@ impl Rendertoy {
     fn render_frame(&mut self, callback: &mut impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
         use ash::version::DeviceV1_0;
         use vulkan::*;
-        let vk = unsafe { vk_all() };
 
-        let swapchain = vk.swapchain.as_ref().unwrap();
+        let present_index = {
+            let vk = vk();
+            let swapchain = vk.swapchain.as_ref().unwrap();
 
-        self.swapchain_acquired_semaphore_idx =
-            (self.swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
+            self.swapchain_acquired_semaphore_idx =
+                (self.swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
 
-        let present_index = unsafe {
-            let (present_index, _) = {
-                match vk.swapchain_loader.acquire_next_image(
-                    swapchain.swapchain,
-                    std::u64::MAX,
-                    swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx],
-                    vk::Fence::null(),
-                ) {
-                    Ok(res) => res,
-                    Err(err)
-                        if err == vk::Result::ERROR_OUT_OF_DATE_KHR
-                            || err == vk::Result::SUBOPTIMAL_KHR =>
-                    {
-                        self.resize();
+            let present_index = unsafe {
+                let (present_index, _) = {
+                    match vk.swapchain_loader.acquire_next_image(
+                        swapchain.swapchain,
+                        std::u64::MAX,
+                        swapchain.swapchain_acquired_semaphores
+                            [self.swapchain_acquired_semaphore_idx],
+                        vk::Fence::null(),
+                    ) {
+                        Ok(res) => res,
+                        Err(err)
+                            if err == vk::Result::ERROR_OUT_OF_DATE_KHR
+                                || err == vk::Result::SUBOPTIMAL_KHR =>
+                        {
+                            self.resize();
 
-                        // Try again
-                        return;
+                            // Try again
+                            return;
+                        }
+                        err @ _ => {
+                            panic!("Could not acquire swapchain image: {:?}", err);
+                        }
                     }
-                    err @ _ => {
-                        panic!("Could not acquire swapchain image: {:?}", err);
-                    }
-                }
+                };
+
+                present_index as usize
             };
 
-            present_index as usize
+            present_index
         };
-        unsafe {
-            vk_begin_frame(present_index);
-        }
 
-        let vk_frame = unsafe { vk_frame() };
+        with_vk_mut(|vk| vk.begin_frame(present_index));
+        let current_frame_data_idx;
 
-        // TODO: don't abuse the Copy
-        let cb = vk_frame.command_buffer.lock().unwrap().cb;
+        let (wait_semaphore, signal_semaphore) = {
+            let vk = vk();
+            let swapchain = vk.swapchain.as_ref().unwrap();
+
+            current_frame_data_idx = present_index;
+            assert_eq!(vk.current_frame_data_idx, Some(current_frame_data_idx));
+
+            (
+                swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx],
+                swapchain.rendering_complete_semaphores[current_frame_data_idx],
+            )
+        };
 
         record_submit_commandbuffer(
-            &vk.device,
-            cb,
-            vk.present_queue,
             &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
-            &[swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx]],
-            &[swapchain.rendering_complete_semaphores[vk_frame_index()]],
-            |_device| {
-                let present_image = swapchain.present_images[vk_frame_index()];
+            &[wait_semaphore],
+            &[signal_semaphore],
+            |vk| {
+                let swapchain = vk.swapchain.as_ref().unwrap();
+                let present_image = swapchain.present_images[current_frame_data_idx];
 
                 record_image_barrier(
                     &vk.device,
-                    cb,
+                    vk.current_frame().command_buffer.lock().unwrap().cb,
                     ImageBarrier::new(
                         present_image,
                         vk_sync::AccessType::Present,
@@ -651,6 +662,8 @@ impl Rendertoy {
                 );
 
                 let final_texture = self.draw_with_frame_snapshot(callback);
+                let cb = vk.current_frame().command_buffer.lock().unwrap();
+                let cb = cb.cb;
 
                 let currently_debugged_texture = self.get_currently_debugged_texture().clone();
                 let ui = self
@@ -733,7 +746,9 @@ impl Rendertoy {
                                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                                 .image_info(&[vk::DescriptorImageInfo::builder()
                                     .image_layout(vk::ImageLayout::GENERAL)
-                                    .image_view(swapchain.present_image_views[vk_frame_index()])
+                                    .image_view(
+                                        swapchain.present_image_views[current_frame_data_idx],
+                                    )
                                     .build()])
                                 .build(),
                         ],
@@ -788,7 +803,9 @@ impl Rendertoy {
             },
         );
 
-        let wait_semaphores = [swapchain.rendering_complete_semaphores[vk_frame_index()]];
+        let vk = vk();
+        let swapchain = vk.swapchain.as_ref().unwrap();
+        let wait_semaphores = [swapchain.rendering_complete_semaphores[current_frame_data_idx]];
         let swapchains = [swapchain.swapchain];
         let image_indices = [present_index as u32];
         let present_info = vk::PresentInfoKHR::builder()

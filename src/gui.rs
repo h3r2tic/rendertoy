@@ -51,7 +51,7 @@ impl ImGuiBackend {
         }
 
         let imgui_renderer = {
-            let vk = unsafe { vk_all() };
+            let vk = vk();
             ash_imgui::Renderer::new(
                 &vk.device,
                 &vk.device_properties,
@@ -73,7 +73,7 @@ impl ImGuiBackend {
         unsafe { device.device_wait_idle() }.unwrap();
 
         if self.imgui_renderer.has_pipeline() {
-            self.imgui_renderer.destroy_pipeline(vk_device());
+            self.imgui_renderer.destroy_pipeline(&vk_device());
         }
 
         if let Some(gfx) = self.gfx.take() {
@@ -88,9 +88,9 @@ impl ImGuiBackend {
         use crate::vulkan::*;
         assert!(self.gfx.is_none());
 
-        let imgui_render_pass = crate::gui::create_imgui_render_pass(vk_device());
+        let imgui_render_pass = crate::gui::create_imgui_render_pass(&vk_device());
         let (imgui_framebuffer, imgui_texture) =
-            crate::gui::create_imgui_framebuffer(vk_device(), imgui_render_pass);
+            crate::gui::create_imgui_framebuffer(&vk_device(), imgui_render_pass);
 
         let gfx = GfxResources {
             imgui_render_pass,
@@ -99,7 +99,7 @@ impl ImGuiBackend {
         };
 
         self.imgui_renderer
-            .create_pipeline(vk_device(), gfx.imgui_render_pass);
+            .create_pipeline(&vk_device(), gfx.imgui_render_pass);
 
         self.gfx = Some(gfx);
     }
@@ -134,15 +134,16 @@ impl ImGuiBackend {
         ui: imgui::Ui,
         cb: vk::CommandBuffer,
     ) -> Option<vk::ImageView> {
+        use crate::vulkan::*;
+        let device = vk_device();
+
         match self.gfx {
             Some(ref gfx) => {
-                use crate::vulkan::*;
-
                 self.imgui_platform.prepare_render(&ui, window);
                 let draw_data = ui.render();
 
                 record_image_barrier(
-                    vk_device(),
+                    &device,
                     cb,
                     ImageBarrier::new(
                         gfx.imgui_texture.image,
@@ -152,7 +153,7 @@ impl ImGuiBackend {
                     .with_discard(true),
                 );
 
-                self.imgui_renderer.begin_frame(vk_device(), cb);
+                self.imgui_renderer.begin_frame(&device, cb);
 
                 {
                     let clear_values = [vk::ClearValue {
@@ -166,16 +167,12 @@ impl ImGuiBackend {
                         .framebuffer(gfx.imgui_framebuffer)
                         .render_area(vk::Rect2D {
                             offset: vk::Offset2D { x: 0, y: 0 },
-                            extent: unsafe { vk_all() }
-                                .swapchain
-                                .as_ref()
-                                .unwrap()
-                                .surface_resolution,
+                            extent: vk().swapchain.as_ref().unwrap().surface_resolution,
                         })
                         .clear_values(&clear_values);
 
                     unsafe {
-                        vk_device().cmd_begin_render_pass(
+                        device.cmd_begin_render_pass(
                             cb,
                             &render_pass_begin_info,
                             vk::SubpassContents::INLINE,
@@ -183,14 +180,14 @@ impl ImGuiBackend {
                     }
                 }
 
-                self.imgui_renderer.render(&draw_data, vk_device(), cb);
+                self.imgui_renderer.render(&draw_data, &device, cb);
 
                 unsafe {
-                    vk_device().cmd_end_render_pass(cb);
+                    device.cmd_end_render_pass(cb);
                 }
 
                 record_image_barrier(
-                    vk_device(),
+                    &device,
                     cb,
                     ImageBarrier::new(
                         gfx.imgui_texture.image,
@@ -251,7 +248,7 @@ pub fn create_imgui_framebuffer(
     device: &ash::Device,
     render_pass: vk::RenderPass,
 ) -> (vk::Framebuffer, Texture) {
-    let surface_resolution = unsafe { crate::vulkan::vk_all() }
+    let surface_resolution = crate::vulkan::vk()
         .swapchain
         .as_ref()
         .unwrap()

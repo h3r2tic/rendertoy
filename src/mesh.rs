@@ -116,7 +116,11 @@ fn load_gltf_material(
 }
 
 #[snoozy(cache)]
-pub async fn load_gltf_scene(ctx: Context, path: &AssetPath, scale: &f32) -> Result<TriangleMesh> {
+pub async fn load_gltf_scene_snoozy(
+    ctx: Context,
+    path: &AssetPath,
+    scale: &f32,
+) -> Result<TriangleMesh> {
     let (gltf, buffers, _imgs) = gltf::import(path.to_path_lossy(ctx).await?)?;
 
     if let Some(scene) = gltf.default_scene() {
@@ -260,7 +264,7 @@ pub struct RasterGpuMesh {
 }
 
 #[snoozy]
-pub async fn make_raster_mesh(
+pub async fn make_raster_mesh_snoozy(
     ctx: Context,
     mesh: &SnoozyRef<TriangleMesh>,
 ) -> Result<RasterGpuMesh> {
@@ -322,7 +326,7 @@ async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u32 {
 }
 
 #[snoozy]
-pub async fn upload_raster_mesh(
+pub async fn upload_raster_mesh_snoozy(
     ctx: Context,
     mesh: &SnoozyRef<RasterGpuMesh>,
 ) -> Result<ShaderUniformBundle> {

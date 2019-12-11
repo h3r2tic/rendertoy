@@ -377,6 +377,8 @@ fn generate_descriptor_set_layouts(
     let mut all_layouts = Vec::new();
     let mut is_dynamic = Vec::new();
 
+    let device = vk_device();
+
     let entry = Some("main");
     for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
         let mut is_set_dynamic = true;
@@ -477,8 +479,7 @@ fn generate_descriptor_set_layouts(
                     &mut binding_flags,
                 ),
                 ReflectDescriptorType::Sampler => {
-                    immutable_samplers
-                        .push(unsafe { vk_all() }.samplers[crate::vulkan::SAMPLER_LINEAR]);
+                    immutable_samplers.push(vk().samplers[crate::vulkan::SAMPLER_LINEAR]);
                     binding_flags.push(vk::DescriptorBindingFlagsEXT::empty());
                     bindings.push(
                         vk::DescriptorSetLayoutBinding::builder()
@@ -503,7 +504,7 @@ fn generate_descriptor_set_layouts(
             .build();
 
         let descriptor_set_layout = unsafe {
-            vk_device()
+            device
                 .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::builder()
                         .bindings(&bindings)
@@ -536,7 +537,7 @@ fn generate_descriptor_set_layouts(
 }
 
 fn create_compute_pipeline(
-    vk_device: &Device,
+    device: &Device,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     shader_code: &[u32],
 ) -> Result<ComputePipeline> {
@@ -548,7 +549,7 @@ fn create_compute_pipeline(
         vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts);
 
     unsafe {
-        let shader_module = vk_device
+        let shader_module = device
             .create_shader_module(
                 &vk::ShaderModuleCreateInfo::builder().code(&shader_code),
                 None,
@@ -560,7 +561,7 @@ fn create_compute_pipeline(
             .stage(vk::ShaderStageFlags::COMPUTE)
             .name(&shader_entry_name);
 
-        let pipeline_layout = vk_device
+        let pipeline_layout = device
             .create_pipeline_layout(&layout_create_info, None)
             .unwrap();
 
@@ -569,7 +570,7 @@ fn create_compute_pipeline(
             .layout(pipeline_layout);
 
         // TODO: pipeline cache
-        let pipeline = vk_device
+        let pipeline = device
             .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
             .expect("pipeline")[0];
 
@@ -635,7 +636,7 @@ fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<
         vk::ShaderStageFlags::COMPUTE,
     ))?;
     let pipeline = create_compute_pipeline(
-        vk_device(),
+        &vk_device(),
         &descriptor_set_layout_info.all_layouts,
         &spirv_binary,
     )?;
@@ -650,7 +651,7 @@ fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<
 }
 
 #[snoozy]
-pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
+pub async fn load_cs_snoozy(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
         &mut ShaderIncludeProvider { ctx: ctx.clone() },
@@ -669,7 +670,7 @@ pub async fn load_cs(ctx: Context, path: &AssetPath) -> Result<ComputeShader> {
 }
 
 #[snoozy]
-pub async fn load_cs_from_string(
+pub async fn load_cs_from_string_snoozy(
     _ctx: Context,
     source: &String,
     name: &String,
@@ -707,7 +708,7 @@ impl Drop for RasterSubShader {
 }
 
 #[snoozy]
-pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> {
+pub async fn load_vs_snoozy(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
         &mut ShaderIncludeProvider { ctx: ctx.clone() },
@@ -727,7 +728,7 @@ pub async fn load_vs(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> 
 }
 
 #[snoozy]
-pub async fn load_ps(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> {
+pub async fn load_ps_snoozy(ctx: Context, path: &AssetPath) -> Result<RasterSubShader> {
     let source = shader_prepper::process_file(
         &path.asset_name,
         &mut ShaderIncludeProvider { ctx: ctx.clone() },
@@ -760,7 +761,7 @@ unsafe impl Send for RasterPipeline {}
 unsafe impl Sync for RasterPipeline {}
 
 #[snoozy]
-pub async fn make_raster_pipeline(
+pub async fn make_raster_pipeline_snoozy(
     ctx: Context,
     shaders_in: &Vec<SnoozyRef<RasterSubShader>>,
 ) -> Result<RasterPipeline> {
@@ -772,7 +773,7 @@ pub async fn make_raster_pipeline(
     }
 
     let surface_format = vk::Format::R32G32B32A32_SFLOAT;
-    //let (width, height) = unsafe { vk_all() }.swapchain_size_pixels();
+    //let (width, height) = vk().swapchain_size_pixels();
     let width = 1;
     let height = 1;
 
@@ -1165,6 +1166,9 @@ fn update_descriptor_sets<'a>(
         ds_writes.clear();
         ds_writes.reserve(uniforms.len());
 
+        let vk = vk();
+        let vk_frame = vk.current_frame();
+
         for refl in refl {
             let entry = Some("main");
             for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
@@ -1174,11 +1178,10 @@ fn update_descriptor_sets<'a>(
                     match binding.descriptor_type {
                         ReflectDescriptorType::UniformBuffer => {
                             let buffer_bytes = binding.block.size as usize;
-                            let (buffer_handle, buffer_offset, buffer_contents) =
-                                unsafe { vk_frame() }
-                                    .uniforms
-                                    .allocate(buffer_bytes)
-                                    .expect("failed to allocate uniform buffer");
+                            let (buffer_handle, buffer_offset, buffer_contents) = vk_frame
+                                .uniforms
+                                .allocate(buffer_bytes)
+                                .expect("failed to allocate uniform buffer");
 
                             for member in binding.block.members.iter() {
                                 if let Some(value) = uniforms.get(&member.name) {
@@ -1428,7 +1431,7 @@ impl TrackedUniformParamSource {
 }
 
 #[snoozy]
-pub async fn compute_tex(
+pub async fn compute_tex_snoozy(
     ctx: Context,
     key: &TextureKey,
     cs: &SnoozyRef<ComputeShader>,
@@ -1447,8 +1450,8 @@ pub async fn compute_tex(
         },
     });
 
-    let device = vk_device();
-    let vk_frame = unsafe { vk_frame() };
+    let vk = vk();
+    let vk_frame = vk.current_frame();
 
     let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformPayload> = HashMap::new();
     flatten_uniforms(uniforms, &mut |e| {
@@ -1466,7 +1469,7 @@ pub async fn compute_tex(
         let descriptor_sets = {
             let layout_info = &cs.descriptor_set_layout_info;
             let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
-            let dynamic_sets = device.allocate_descriptor_sets(
+            let dynamic_sets = vk.device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::builder()
                     .descriptor_pool(*descriptor_pool)
                     .set_layouts(&layout_info.dynamic_layouts)
@@ -1483,7 +1486,7 @@ pub async fn compute_tex(
         };
 
         let ds_update_result = update_descriptor_sets(
-            device,
+            &vk.device,
             std::iter::once(&cs.spirv_reflection),
             &descriptor_sets,
             &mut uniform_source,
@@ -1498,7 +1501,7 @@ pub async fn compute_tex(
 
     unsafe {
         record_image_barrier(
-            vk_device(),
+            &vk.device,
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1511,17 +1514,18 @@ pub async fn compute_tex(
         let mut descriptor_sets = descriptor_sets;
 
         for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-            descriptor_sets[*idx] = Some(vk_all().bindless_buffers_descriptor_set);
+            descriptor_sets[*idx] = Some(vk.bindless_buffers_descriptor_set);
         }
 
         for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-            descriptor_sets[*idx] = Some(vk_all().bindless_images_descriptor_set);
+            descriptor_sets[*idx] = Some(vk.bindless_images_descriptor_set);
         }
 
         let descriptor_sets: Vec<_> = descriptor_sets.into_iter().map(Option::unwrap).collect();
 
-        device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
-        device.cmd_bind_descriptor_sets(
+        vk.device
+            .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, cs.pipeline.pipeline);
+        vk.device.cmd_bind_descriptor_sets(
             cb,
             vk::PipelineBindPoint::COMPUTE,
             cs.pipeline.pipeline_layout,
@@ -1533,21 +1537,21 @@ pub async fn compute_tex(
         let query_id = crate::gpu_profiler::create_gpu_query(&cs.name);
         let vk_query_idx = vk_frame.profiler_data.get_query_id(query_id);
 
-        device.cmd_write_timestamp(
+        vk.device.cmd_write_timestamp(
             cb,
             vk::PipelineStageFlags::BOTTOM_OF_PIPE,
             vk_frame.profiler_data.query_pool,
             vk_query_idx * 2 + 0,
         );
 
-        device.cmd_dispatch(
+        vk.device.cmd_dispatch(
             cb,
             (key.width + cs.local_size.0 - 1) / cs.local_size.0,
             (key.height + cs.local_size.1 - 1) / cs.local_size.1,
             1,
         );
 
-        device.cmd_write_timestamp(
+        vk.device.cmd_write_timestamp(
             cb,
             vk::PipelineStageFlags::BOTTOM_OF_PIPE,
             vk_frame.profiler_data.query_pool,
@@ -1555,7 +1559,7 @@ pub async fn compute_tex(
         );
 
         record_image_barrier(
-            vk_device(),
+            &vk.device,
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1572,7 +1576,7 @@ pub async fn compute_tex(
 }
 
 #[snoozy]
-pub async fn raster_tex(
+pub async fn raster_tex_snoozy(
     ctx: Context,
     key: &TextureKey,
     raster_pipe: &SnoozyRef<RasterPipeline>,
@@ -1592,16 +1596,15 @@ pub async fn raster_tex(
 
     //println!("---- raster_tex: ----");
 
-    let device = vk_device();
-    let vk_all = unsafe { vk_all() };
-    let vk_frame = unsafe { vk_frame() };
+    let vk = vk();
+    let vk_frame = vk.current_frame();
 
     let cb = vk_frame.command_buffer.lock().unwrap();
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
         record_image_barrier(
-            vk_device(),
+            &vk.device,
             cb,
             ImageBarrier::new(
                 output_tex.image,
@@ -1625,7 +1628,7 @@ pub async fn raster_tex(
             },
         ];
 
-        let texture_attachments = [output_tex.rt_view, vk_all.depth_image_view];
+        let texture_attachments = [output_tex.rt_view, vk.depth_image_view];
         let mut pass_attachment_desc =
             vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(&texture_attachments);
 
@@ -1641,14 +1644,14 @@ pub async fn raster_tex(
                 .height(key.height as _)
                 .layers(1)
                 .attachments(&texture_attachments);
-            let fbo = device.create_framebuffer(&fbo_desc, None)?;
+            let fbo = vk.device.create_framebuffer(&fbo_desc, None)?;
 
             vk_frame
                 .frame_cleanup
                 .lock()
                 .unwrap()
-                .push(Box::new(move |vk_all| {
-                    vk_all.device.destroy_framebuffer(fbo, None);
+                .push(Box::new(move |vk| {
+                    vk.device.destroy_framebuffer(fbo, None);
                 }));
 
             fbo
@@ -1670,7 +1673,8 @@ pub async fn raster_tex(
             pass_begin_desc = pass_begin_desc.push_next(&mut pass_attachment_desc)
         }
 
-        device.cmd_begin_render_pass(cb, &pass_begin_desc, vk::SubpassContents::INLINE);
+        vk.device
+            .cmd_begin_render_pass(cb, &pass_begin_desc, vk::SubpassContents::INLINE);
     }
 
     let flush_draw = |uniform_source: &mut TrackedUniformParamSource| -> Result<()> {
@@ -1679,7 +1683,7 @@ pub async fn raster_tex(
                 let descriptor_sets = {
                     let layout_info = &raster_pipe.descriptor_set_layout_info;
                     let descriptor_pool = vk_frame.descriptor_pool.lock().unwrap();
-                    let dynamic_sets = device.allocate_descriptor_sets(
+                    let dynamic_sets = vk.device.allocate_descriptor_sets(
                         &vk::DescriptorSetAllocateInfo::builder()
                             .descriptor_pool(*descriptor_pool)
                             .set_layouts(&layout_info.dynamic_layouts)
@@ -1696,7 +1700,7 @@ pub async fn raster_tex(
                 };
 
                 let ds_update_result = update_descriptor_sets(
-                    device,
+                    &vk.device,
                     raster_pipe.shader_refl.iter(),
                     &descriptor_sets,
                     uniform_source,
@@ -1709,18 +1713,19 @@ pub async fn raster_tex(
             let mut descriptor_sets = descriptor_sets;
 
             for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-                descriptor_sets[*idx] = Some(vk_all.bindless_buffers_descriptor_set);
+                descriptor_sets[*idx] = Some(vk.bindless_buffers_descriptor_set);
             }
 
             for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-                descriptor_sets[*idx] = Some(vk_all.bindless_images_descriptor_set);
+                descriptor_sets[*idx] = Some(vk.bindless_images_descriptor_set);
             }
 
             let descriptor_sets: Vec<_> = descriptor_sets.into_iter().map(Option::unwrap).collect();
 
-            device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
+            vk.device
+                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, raster_pipe.pipeline);
 
-            device.cmd_set_viewport(
+            vk.device.cmd_set_viewport(
                 cb,
                 0,
                 &[vk::Viewport {
@@ -1732,7 +1737,7 @@ pub async fn raster_tex(
                     max_depth: 1.0,
                 }],
             );
-            device.cmd_set_scissor(
+            vk.device.cmd_set_scissor(
                 cb,
                 0,
                 &[vk::Rect2D {
@@ -1744,7 +1749,7 @@ pub async fn raster_tex(
                 }],
             );
 
-            device.cmd_bind_descriptor_sets(
+            vk.device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
                 raster_pipe.pipeline_layout,
@@ -1796,8 +1801,9 @@ pub async fn raster_tex(
                 if let Some(index_buffer) = mesh.index_buffer {
                     unsafe {
                         flush_draw(&mut uniform_source).expect("flush_draw");
-                        device.cmd_bind_index_buffer(cb, index_buffer, 0, vk::IndexType::UINT32);
-                        device.cmd_draw_indexed(cb, index_count as _, 1, 0, 0, 0);
+                        vk.device
+                            .cmd_bind_index_buffer(cb, index_buffer, 0, vk::IndexType::UINT32);
+                        vk.device.cmd_draw_indexed(cb, index_count as _, 1, 0, 0, 0);
                         //println!("-------");
                     }
                 }
@@ -1806,10 +1812,10 @@ pub async fn raster_tex(
     });
 
     unsafe {
-        device.cmd_end_render_pass(cb);
+        vk.device.cmd_end_render_pass(cb);
 
         record_image_barrier(
-            vk_device(),
+            &vk.device,
             cb,
             ImageBarrier::new(
                 output_tex.image,

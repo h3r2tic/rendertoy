@@ -106,47 +106,45 @@ impl ImageResource {
         tiling: vk::ImageTiling,
         usage: vk::ImageUsageFlags,
     ) {
-        unsafe {
-            let mem_info = vk_mem::AllocationCreateInfo {
-                usage: vk_mem::MemoryUsage::GpuOnly,
-                ..Default::default()
-            };
+        let mem_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::GpuOnly,
+            ..Default::default()
+        };
 
-            let mut view_formats = vec![format];
-            if storage_format != format {
-                view_formats.push(storage_format);
-            }
-
-            let mut format_list = Box::new(
-                vk::ImageFormatListCreateInfoKHR::builder()
-                    .view_formats(&view_formats)
-                    .build(),
-            );
-
-            let create_info = vk::ImageCreateInfo::builder()
-                .image_type(image_type)
-                .format(storage_format)
-                .extent(extent)
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(tiling)
-                .usage(usage)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
-                .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
-                .push_next(&mut *format_list)
-                .build();
-
-            let (image, _allocation, _allocation_info) = vk_all()
-                .allocator
-                .create_image(&create_info, &mem_info)
-                .unwrap();
-
-            self.view_formats = Some(view_formats);
-            self.format_list = Some(format_list);
-            self.image = image;
+        let mut view_formats = vec![format];
+        if storage_format != format {
+            view_formats.push(storage_format);
         }
+
+        let mut format_list = Box::new(
+            vk::ImageFormatListCreateInfoKHR::builder()
+                .view_formats(&view_formats)
+                .build(),
+        );
+
+        let create_info = vk::ImageCreateInfo::builder()
+            .image_type(image_type)
+            .format(storage_format)
+            .extent(extent)
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(tiling)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
+            .push_next(&mut *format_list)
+            .build();
+
+        let (image, _allocation, _allocation_info) = vk()
+            .allocator
+            .create_image(&create_info, &mem_info)
+            .unwrap();
+
+        self.view_formats = Some(view_formats);
+        self.format_list = Some(format_list);
+        self.image = image;
     }
 
     fn create_view(
@@ -173,16 +171,18 @@ impl ImageResource {
                 })
         };
 
+        let device = vk_device();
+
         {
             let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(readonly_usage);
             let create_info = create_info().push_next(&mut view_usage).build();
-            self.view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+            self.view = unsafe { device.create_image_view(&create_info, None).unwrap() };
         }
 
         {
             let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(rt_usage);
             let create_info = create_info().push_next(&mut view_usage).build();
-            self.rt_view = unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+            self.rt_view = unsafe { device.create_image_view(&create_info, None).unwrap() };
         }
 
         {
@@ -190,8 +190,7 @@ impl ImageResource {
                 .format(storage_format)
                 .image(self.image)
                 .build();
-            self.storage_view =
-                unsafe { vk_device().create_image_view(&create_info, None).unwrap() };
+            self.storage_view = unsafe { device.create_image_view(&create_info, None).unwrap() };
         }
     }
 }
@@ -261,7 +260,7 @@ impl TransientResource for Texture {
             },
         );
 
-        img.bindless_index = unsafe { vk_all() }.register_image_bindless_index(img.view);
+        img.bindless_index = vk().register_image_bindless_index(img.view);
 
         img
         /*unsafe {

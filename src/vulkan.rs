@@ -9,7 +9,7 @@ use ash::{vk, Device, Entry, Instance};
 use std::error::Error;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 
 unsafe extern "system" fn vulkan_debug_callback(
     _: vk::DebugReportFlagsEXT,
@@ -63,14 +63,11 @@ unsafe impl Sync for LinearUniformBuffer {}
 
 impl Drop for LinearUniformBuffer {
     fn drop(&mut self) {
-        self.unmap();
-
-        unsafe {
-            let vk = vk_all();
-            vk.allocator
-                .destroy_buffer(self.buffer, &self.allocation)
-                .unwrap()
-        }
+        let vk = vk();
+        self.unmap(&vk.device, &vk.allocator);
+        vk.allocator
+            .destroy_buffer(self.buffer, &self.allocation)
+            .unwrap()
     }
 }
 
@@ -109,11 +106,9 @@ impl LinearUniformBuffer {
         }
     }
 
-    pub fn map(&mut self) {
+    pub fn map(&mut self, allocator: &vk_mem::Allocator) {
         if self.mapped_ptr == std::ptr::null_mut() {
-            unsafe {
-                self.mapped_ptr = vk_all().allocator.map_memory(&self.allocation).unwrap();
-            }
+            self.mapped_ptr = allocator.map_memory(&self.allocation).unwrap();
 
             assert!(
                 self.mapped_ptr != std::ptr::null_mut(),
@@ -122,7 +117,7 @@ impl LinearUniformBuffer {
         }
     }
 
-    pub fn unmap(&mut self) {
+    pub fn unmap(&mut self, device: &Device, allocator: &vk_mem::Allocator) {
         if self.mapped_ptr != std::ptr::null_mut() {
             let bytes_written = self
                 .write_head
@@ -134,14 +129,12 @@ impl LinearUniformBuffer {
                 size: bytes_written as vk::DeviceSize,
                 ..Default::default()
             }];
-            unsafe { vk_device().flush_mapped_memory_ranges(&mapped_ranges) }.unwrap();
 
-            unsafe {
-                vk_all()
-                    .allocator
-                    .unmap_memory(&self.allocation)
-                    .expect("unmap_memory");
-            }
+            unsafe { device.flush_mapped_memory_ranges(&mapped_ranges) }.unwrap();
+
+            allocator
+                .unmap_memory(&self.allocation)
+                .expect("unmap_memory");
             self.mapped_ptr = std::ptr::null_mut();
         }
     }
@@ -183,7 +176,7 @@ pub struct VkProfilerData {
 impl Drop for VkProfilerData {
     fn drop(&mut self) {
         unsafe {
-            let vk = vk_all();
+            let vk = vk();
             vk.allocator
                 .destroy_buffer(self.buffer, &self.allocation)
                 .unwrap();
@@ -253,21 +246,22 @@ impl VkProfilerData {
     }
 
     // Two timing values per query
-    fn retrieve_previous_result(&self) -> (Vec<GpuProfilerQueryId>, Vec<u64>) {
+    fn retrieve_previous_result(
+        &self,
+        allocator: &vk_mem::Allocator,
+    ) -> (Vec<GpuProfilerQueryId>, Vec<u64>) {
         let valid_query_count = self
             .next_query_id
             .load(std::sync::atomic::Ordering::Relaxed) as usize;
 
-        let mapped_ptr = unsafe { vk_all() }
-            .allocator
+        let mapped_ptr = allocator
             .map_memory(&self.allocation)
             .expect("mapping a query buffer failed") as *mut u64;
 
         let result =
             unsafe { std::slice::from_raw_parts(mapped_ptr, valid_query_count * 2) }.to_owned();
 
-        unsafe { vk_all() }
-            .allocator
+        allocator
             .unmap_memory(&self.allocation)
             .expect("unmapping a query buffer failed");
 
@@ -368,6 +362,7 @@ pub struct VkKitchenSink {
     pub bindless_images_next_descriptor: Mutex<u32>,
 
     pub frame_data: Vec<VkFrameData>,
+    pub current_frame_data_idx: Option<usize>,
 
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
@@ -490,8 +485,7 @@ impl Drop for VkSwapchain {
 
             // TODO: semaphores
 
-            vk_all()
-                .swapchain_loader
+            vk().swapchain_loader
                 .destroy_swapchain(self.swapchain, None);
         }
     }
@@ -887,23 +881,21 @@ impl VkKitchenSink {
                 .create_image_view(&depth_image_view_info, None)
                 .unwrap();
 
-            vk_add_setup_command(move |vk_all, vk_frame| {
+            vk_add_setup_command(move |vk, vk_frame| {
                 let cb = vk_frame.command_buffer.lock().unwrap();
-                let cb: vk::CommandBuffer = cb.cb;
+                let cb = cb.cb;
 
-                {
-                    record_image_aspect_barrier(
-                        &vk_all.device,
-                        cb,
-                        vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
-                        ImageBarrier::new(
-                            depth_image,
-                            vk_sync::AccessType::Nothing,
-                            vk_sync::AccessType::DepthAttachmentWriteStencilReadOnly,
-                        )
-                        .with_discard(true),
+                record_image_aspect_barrier(
+                    &vk.device,
+                    cb,
+                    vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
+                    ImageBarrier::new(
+                        depth_image,
+                        vk_sync::AccessType::Nothing,
+                        vk_sync::AccessType::DepthAttachmentWriteStencilReadOnly,
                     )
-                };
+                    .with_discard(true),
+                )
             });
 
             let mut res = Self {
@@ -922,6 +914,7 @@ impl VkKitchenSink {
                 swapchain_create_info,
                 samplers: [sampler],
                 frame_data: Vec::new(),
+                current_frame_data_idx: None,
                 surface,
                 allocator,
                 bindless_buffers_descriptor_set,
@@ -937,6 +930,38 @@ impl VkKitchenSink {
             res.create_frame_data();
             Ok(res)
         }
+    }
+
+    pub fn begin_frame(&mut self, idx: usize) {
+        self.current_frame_data_idx = Some(idx % self.frame_data.len());
+    }
+
+    pub fn current_frame<'a>(&'a self) -> &'a VkFrameData {
+        &self.frame_data[self
+            .current_frame_data_idx
+            .expect("Rendering not started yet. `current_frame` not available")]
+    }
+
+    pub fn current_frame_mut(&mut self) -> &mut VkFrameData {
+        &mut self.frame_data[self
+            .current_frame_data_idx
+            .expect("Rendering not started yet. `current_frame` not available")]
+    }
+
+    pub fn map_uniforms(&mut self) {
+        let vk_frame = &mut self.frame_data[self
+            .current_frame_data_idx
+            .expect("Rendering not started yet. `current_frame` not available")];
+        let allocator = &self.allocator;
+        vk_frame.uniforms.map(allocator);
+    }
+
+    pub fn unmap_uniforms(&mut self) {
+        let vk_frame = &mut self.frame_data[self
+            .current_frame_data_idx
+            .expect("Rendering not started yet. `current_frame` not available")];
+        let allocator = &self.allocator;
+        vk_frame.uniforms.unmap(&self.device, allocator);
     }
 
     pub fn swapchain_size_pixels(&self) -> (u32, u32) {
@@ -1220,179 +1245,197 @@ impl Drop for VkKitchenSink {
     }
 }
 
-pub fn record_submit_commandbuffer<F: FnOnce(&Device)>(
-    device: &Device,
-    command_buffer: vk::CommandBuffer,
-    submit_queue: vk::Queue,
+pub fn record_submit_commandbuffer<F: FnOnce(&VkKitchenSink)>(
     wait_mask: &[vk::PipelineStageFlags],
     wait_semaphores: &[vk::Semaphore],
     signal_semaphores: &[vk::Semaphore],
     render_fn: F,
 ) {
     unsafe {
-        device
-            .wait_for_fences(&[vk_frame().submit_done_fence], true, std::u64::MAX)
-            .expect("Wait for fence failed.");
+        with_vk_mut(|vk| {
+            let submit_done_fence = vk.current_frame_mut().submit_done_fence;
+            vk.device
+                .wait_for_fences(&[submit_done_fence], true, std::u64::MAX)
+                .expect("Wait for fence failed.");
 
-        let (query_ids, timing_pairs) = vk_frame().profiler_data.retrieve_previous_result();
+            let (query_ids, timing_pairs) = vk
+                .current_frame()
+                .profiler_data
+                .retrieve_previous_result(&vk.allocator);
 
-        crate::gpu_profiler::report_durations_ticks(timing_pairs.chunks_exact(2).enumerate().map(
-            |(pair_idx, chunk)| -> (GpuProfilerQueryId, u64) {
-                (query_ids[pair_idx], chunk[1] - chunk[0])
-            },
-        ));
+            let ns_per_tick = vk.device_properties.limits.timestamp_period;
 
-        device
-            .reset_command_buffer(
-                command_buffer,
-                vk::CommandBufferResetFlags::RELEASE_RESOURCES,
-            )
-            .expect("Reset command buffer failed.");
+            crate::gpu_profiler::report_durations_ticks(
+                ns_per_tick,
+                timing_pairs.chunks_exact(2).enumerate().map(
+                    |(pair_idx, chunk)| -> (GpuProfilerQueryId, u64) {
+                        (query_ids[pair_idx], chunk[1] - chunk[0])
+                    },
+                ),
+            );
+
+            vk.map_uniforms();
+        });
 
         {
-            let vk_all = vk_all();
-            for f in vk_frame().frame_cleanup.lock().unwrap().drain(..) {
-                (f)(vk_all);
+            let vk = vk();
+            let vk_frame = vk.current_frame();
+
+            {
+                {
+                    let cb = vk_frame.command_buffer.lock().unwrap();
+
+                    vk.device
+                        .reset_command_buffer(cb.cb, vk::CommandBufferResetFlags::RELEASE_RESOURCES)
+                        .expect("Reset command buffer failed.");
+                }
+
+                for f in vk_frame.frame_cleanup.lock().unwrap().drain(..) {
+                    (f)(&*vk);
+                }
+
+                {
+                    let pool = vk_frame.descriptor_pool.lock().unwrap();
+                    vk.device
+                        .reset_descriptor_pool(*pool, Default::default())
+                        .expect("reset_descriptor_pool");
+                    drop(pool);
+                }
+
+                let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+                {
+                    let cb = vk_frame.command_buffer.lock().unwrap();
+                    let cb = cb.cb;
+                    vk.device
+                        .begin_command_buffer(cb, &command_buffer_begin_info)
+                        .expect("Begin commandbuffer");
+
+                    vk_frame.profiler_data.begin_frame(&vk.device, cb);
+                }
             }
+
+            for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
+                f(&*vk, vk_frame);
+            }
+
+            render_fn(&*vk);
         }
+
+        with_vk_mut(|vk| {
+            vk.unmap_uniforms();
+        });
+
+        let vk = vk();
+        let vk_frame = vk.current_frame();
 
         {
-            let pool = vk_frame().descriptor_pool.lock().unwrap();
-            device
-                .reset_descriptor_pool(*pool, Default::default())
-                .expect("reset_descriptor_pool");
-            drop(pool);
+            let cb = vk_frame.command_buffer.lock().unwrap();
+            let cb = cb.cb;
+
+            vk_frame.profiler_data.finish_frame(&vk.device, cb);
+
+            vk.device.end_command_buffer(cb).expect("End commandbuffer");
+
+            let submit_fence = vk_frame.submit_done_fence;
+            vk.device
+                .reset_fences(&[submit_fence])
+                .expect("reset_fences");
+
+            let command_buffers = vec![cb];
+
+            let submit_info = vk::SubmitInfo::builder()
+                .wait_semaphores(wait_semaphores)
+                .wait_dst_stage_mask(wait_mask)
+                .command_buffers(&command_buffers)
+                .signal_semaphores(signal_semaphores);
+
+            vk.device
+                .queue_submit(vk.present_queue, &[submit_info.build()], submit_fence)
+                .expect("queue submit failed.");
         }
-
-        let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        device
-            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
-            .expect("Begin commandbuffer");
-
-        vk_frame().profiler_data.begin_frame(device, command_buffer);
-        vk_frame_mut().uniforms.map();
-
-        for f in VK_SETUP_COMMANDS.lock().unwrap().drain(..).into_iter() {
-            f(vk_all(), vk_frame());
-        }
-
-        render_fn(device);
-
-        for fd in VK_KITCHEN_SINK.as_mut().unwrap().frame_data.iter_mut() {
-            fd.uniforms.unmap();
-        }
-
-        vk_frame()
-            .profiler_data
-            .finish_frame(device, command_buffer);
-
-        device
-            .end_command_buffer(command_buffer)
-            .expect("End commandbuffer");
-
-        let submit_fence = vk_frame().submit_done_fence;
-        device.reset_fences(&[submit_fence]).expect("reset_fences");
-
-        let command_buffers = vec![command_buffer];
-
-        let submit_info = vk::SubmitInfo::builder()
-            .wait_semaphores(wait_semaphores)
-            .wait_dst_stage_mask(wait_mask)
-            .command_buffers(&command_buffers)
-            .signal_semaphores(signal_semaphores);
-
-        device
-            .queue_submit(submit_queue, &[submit_info.build()], submit_fence)
-            .expect("queue submit failed.");
     }
 }
 
-static mut VK_KITCHEN_SINK: Option<VkKitchenSink> = None;
-static mut VK_CURRENT_FRAME_DATA_IDX: usize = std::usize::MAX;
+mod vk_backend_internals {
+    use super::*;
+    static mut VK_KITCHEN_SINK: Option<RwLock<Arc<VkKitchenSink>>> = None;
 
-pub fn initialize_vk_state(vk: VkKitchenSink) {
-    unsafe {
-        VK_KITCHEN_SINK = Some(vk);
+    pub fn initialize_vk_state(vk: VkKitchenSink) {
+        unsafe {
+            assert!(VK_KITCHEN_SINK.is_none());
+            VK_KITCHEN_SINK = Some(RwLock::new(Arc::new(vk)));
+        }
+    }
+
+    pub fn vk_device() -> Device {
+        vk().device.clone()
+    }
+
+    pub fn vk() -> impl std::ops::Deref<Target = VkKitchenSink> {
+        let arc: Arc<_> = unsafe { VK_KITCHEN_SINK.as_ref() }
+            .expect("Vulkan backend not initialized yet!")
+            .try_read()
+            .expect("Cannot get a lock of the vulkan backend. It is being used exclusively")
+            .clone();
+        arc
+    }
+
+    pub fn with_vk_mut<R, Cb: Fn(&mut VkKitchenSink) -> R>(cb: Cb) -> R {
+        let mut arc: &mut Arc<_> = &mut *unsafe { VK_KITCHEN_SINK.as_ref() }
+            .expect("Vulkan backend not initialized yet!")
+            .try_write()
+            .expect("Cannot mutably acquire the vulkan backend. The lock is being held.");
+        cb(&mut *Arc::get_mut(&mut arc).expect(
+            "Cannot mutably acquire the vulkan backend. A reference has been illegally retained.",
+        ))
+    }
+
+    pub fn vk_add_setup_command(f: impl FnOnce(&VkKitchenSink, &VkFrameData) + Send + 'static) {
+        if unsafe { VK_KITCHEN_SINK.is_none() } || vk().current_frame_data_idx.is_none() {
+            // If we haven't started rendering yet, delay this.
+            VK_SETUP_COMMANDS.lock().unwrap().push(Box::new(f));
+        } else {
+            // Otherwise do it now
+            let vk = vk();
+            f(&*vk, vk.current_frame());
+        }
     }
 }
 
-pub fn vk_device() -> &'static Device {
-    unsafe { std::mem::transmute(&VK_KITCHEN_SINK.as_ref().expect("vk kitchen sink").device) }
-}
+pub use vk_backend_internals::*;
 
-pub unsafe fn vk_begin_frame(data_idx: usize) {
-    VK_CURRENT_FRAME_DATA_IDX = data_idx;
-}
+pub fn vk_resize(width: u32, height: u32) -> bool {
+    with_vk_mut(|vk| {
+        unsafe { vk.device.device_wait_idle() }.unwrap();
 
-pub unsafe fn vk_all() -> &'static VkKitchenSink {
-    std::mem::transmute(VK_KITCHEN_SINK.as_ref().expect("vk kitchen sink"))
-}
+        let mut create_info = vk.swapchain_create_info;
+        create_info.surface_resolution = vk::Extent2D { width, height };
 
-pub unsafe fn vk_resize(width: u32, height: u32) -> bool {
-    let vk = VK_KITCHEN_SINK.as_mut().unwrap();
-    vk.device.device_wait_idle().unwrap();
+        vk.frame_data = Vec::new();
+        vk.swapchain = None;
 
-    let mut create_info = vk.swapchain_create_info;
-    create_info.surface_resolution = vk::Extent2D { width, height };
+        vk.swapchain = create_swapchain(
+            &vk.device,
+            vk.pdevice,
+            &vk.swapchain_loader,
+            &vk.surface_loader,
+            vk.surface,
+            create_info,
+        );
 
-    vk.frame_data = Vec::new();
-    vk.swapchain = None;
-
-    vk.swapchain = create_swapchain(
-        &vk.device,
-        vk.pdevice,
-        &vk.swapchain_loader,
-        &vk.surface_loader,
-        vk.surface,
-        create_info,
-    );
-
-    if vk.swapchain.is_some() {
-        vk.swapchain_create_info = create_info;
-        vk.create_frame_data();
-        true
-    } else {
-        false
-    }
-}
-
-pub unsafe fn vk_frame() -> &'static VkFrameData {
-    assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
-    std::mem::transmute(
-        &VK_KITCHEN_SINK
-            .as_ref()
-            .expect("vk kitchen sink")
-            .frame_data[VK_CURRENT_FRAME_DATA_IDX],
-    )
-}
-
-pub fn vk_frame_index() -> usize {
-    unsafe { VK_CURRENT_FRAME_DATA_IDX }
-}
-
-pub(crate) unsafe fn vk_frame_mut() -> &'static mut VkFrameData {
-    assert!(VK_CURRENT_FRAME_DATA_IDX != std::usize::MAX);
-    std::mem::transmute(
-        &mut VK_KITCHEN_SINK
-            .as_mut()
-            .expect("vk kitchen sink")
-            .frame_data[VK_CURRENT_FRAME_DATA_IDX],
-    )
+        if vk.swapchain.is_some() {
+            vk.swapchain_create_info = create_info;
+            vk.create_frame_data();
+            true
+        } else {
+            false
+        }
+    })
 }
 
 lazy_static! {
-    pub(crate) static ref VK_SETUP_COMMANDS: Mutex<Vec<Box<dyn FnOnce(&VkKitchenSink, &'static VkFrameData) + Send + 'static>>> =
+    pub(crate) static ref VK_SETUP_COMMANDS: Mutex<Vec<Box<dyn FnOnce(&VkKitchenSink, &VkFrameData) + Send + 'static>>> =
         { Mutex::new(Vec::new()) };
-}
-
-pub fn vk_add_setup_command(f: impl FnOnce(&VkKitchenSink, &'static VkFrameData) + Send + 'static) {
-    if unsafe { VK_CURRENT_FRAME_DATA_IDX } == std::usize::MAX {
-        // If we haven't started rendering yet, delay this.
-        VK_SETUP_COMMANDS.lock().unwrap().push(Box::new(f));
-    } else {
-        // Otherwise do it now
-        unsafe { f(vk_all(), vk_frame()) };
-    }
 }

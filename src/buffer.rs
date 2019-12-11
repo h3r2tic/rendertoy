@@ -7,7 +7,7 @@ use snoozy::*;
 use std::mem::size_of;
 
 #[snoozy]
-pub async fn upload_buffer<T: Sized + Copy + Send + Sync + 'static>(
+pub async fn upload_buffer_snoozy<T: Sized + Copy + Send + Sync + 'static>(
     _ctx: Context,
     contents: &T,
 ) -> Result<Buffer> {
@@ -79,7 +79,7 @@ where
     let size_bytes = contents.len() * size_of_t;
     let res = backend::buffer::create_buffer(BufferKey::new(size_bytes, texture_format));
 
-    let (staging_buffer, staging_allocation, _staging_allocation_info) = unsafe {
+    let (staging_buffer, staging_allocation, _staging_allocation_info) = {
         let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::TRANSFER_SRC;
 
         let mem_info = vk_mem::AllocationCreateInfo {
@@ -93,37 +93,33 @@ where
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .build();
 
-        vk_all()
-            .allocator
+        vk().allocator
             .create_buffer(&buffer_info, &mem_info)
             .expect("vma::create_buffer")
     };
 
     unsafe {
-        let mapped_ptr = vk_all()
-            .allocator
-            .map_memory(&staging_allocation)
-            .expect("mapping a staging buffer failed")
-            as *mut std::ffi::c_void;
+        let mapped_ptr =
+            vk().allocator
+                .map_memory(&staging_allocation)
+                .expect("mapping a staging buffer failed") as *mut std::ffi::c_void;
 
         std::slice::from_raw_parts_mut(mapped_ptr as *mut u8, size_bytes).copy_from_slice(
             &std::slice::from_raw_parts(contents.as_ptr() as *const u8, size_bytes),
         );
-        vk_all()
-            .allocator
+        vk().allocator
             .unmap_memory(&staging_allocation)
             .expect("unmap_memory");
     }
 
     let copy_dst_buffer = res.buffer;
-    vk_add_setup_command(move |vk_all, vk_frame| {
+    vk_add_setup_command(move |vk, vk_frame| {
         vk_frame
             .frame_cleanup
             .lock()
             .unwrap()
-            .push(Box::new(move |vk_all| {
-                vk_all
-                    .allocator
+            .push(Box::new(move |vk| {
+                vk.allocator
                     .destroy_buffer(staging_buffer, &staging_allocation)
                     .unwrap()
             }));
@@ -134,7 +130,7 @@ where
         let buffer_copy_regions = vk::BufferCopy::builder().size(size_bytes as u64);
 
         unsafe {
-            vk_all.device.cmd_copy_buffer(
+            vk.device.cmd_copy_buffer(
                 cb,
                 staging_buffer,
                 copy_dst_buffer,
@@ -151,13 +147,7 @@ where
                 ],
             };
 
-            vk_sync::cmd::pipeline_barrier(
-                vk_all.device.fp_v1_0(),
-                cb,
-                Some(global_barrier),
-                &[],
-                &[],
-            );
+            vk_sync::cmd::pipeline_barrier(vk.device.fp_v1_0(), cb, Some(global_barrier), &[], &[]);
         }
     });
 
@@ -165,7 +155,7 @@ where
 }
 
 #[snoozy]
-pub async fn upload_array_buffer<
+pub async fn upload_array_buffer_snoozy<
     T: Sized + Copy + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(
@@ -176,7 +166,7 @@ pub async fn upload_array_buffer<
 }
 
 #[snoozy]
-pub async fn upload_array_tex_buffer<
+pub async fn upload_array_tex_buffer_snoozy<
     T: Sized + Copy + 'static,
     C: Deref<Target = Vec<T>> + Send + Sync + Sized + 'static,
 >(

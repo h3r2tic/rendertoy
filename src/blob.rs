@@ -9,7 +9,7 @@ pub struct Blob {
 }
 
 #[snoozy]
-pub async fn load_blob(ctx: Context, path: &AssetPath) -> Result<Blob> {
+pub async fn load_blob_snoozy(ctx: Context, path: &AssetPath) -> Result<Blob> {
     ctx.set_debug_name(&path.asset_name);
 
     let mut buffer = Vec::new();

@@ -18,7 +18,7 @@ pub struct TexParams {
 }
 
 #[snoozy]
-pub async fn load_tex(ctx: Context, path: &AssetPath) -> Result<Texture> {
+pub async fn load_tex_snoozy(ctx: Context, path: &AssetPath) -> Result<Texture> {
     let tex = ctx
         .get(load_tex_with_params(
             path.clone(),
@@ -37,7 +37,7 @@ pub struct RawRgba8Image {
 }
 
 #[snoozy(cache)]
-pub async fn load_raw_ldr_tex(ctx: Context, path: &AssetPath) -> Result<RawRgba8Image> {
+pub async fn load_raw_ldr_tex_snoozy(ctx: Context, path: &AssetPath) -> Result<RawRgba8Image> {
     use image::GenericImageView;
 
     let blob = ctx.get(&load_blob(path.clone())).await?;
@@ -74,6 +74,7 @@ fn load_tex_impl(
     use ash::version::DeviceV1_0;
 
     let device = vk_device();
+
     let image_buffer_info = vk::BufferCreateInfo {
         size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
         usage: vk::BufferUsageFlags::TRANSFER_SRC,
@@ -86,13 +87,13 @@ fn load_tex_impl(
         ..Default::default()
     };
 
-    let (image_buffer, buffer_allocation, buffer_allocation_info) = unsafe { vk_all() }
+    let (image_buffer, buffer_allocation, buffer_allocation_info) = vk()
         .allocator
         .create_buffer(&image_buffer_info, &buffer_mem_info)
         .expect("vma::create_buffer");
 
     unsafe {
-        let image_ptr = vk_all()
+        let image_ptr = vk()
             .allocator
             .map_memory(&buffer_allocation)
             .expect("mapping an image upload buffer failed")
@@ -104,8 +105,7 @@ fn load_tex_impl(
         );
 
         image_slice.copy_from_slice(image_data);
-        vk_all()
-            .allocator
+        vk().allocator
             .unmap_memory(&buffer_allocation)
             .expect("unmap_memory");
     }
@@ -122,9 +122,8 @@ fn load_tex_impl(
             .frame_cleanup
             .lock()
             .unwrap()
-            .push(Box::new(move |vk_all| {
-                vk_all
-                    .allocator
+            .push(Box::new(move |vk| {
+                vk.allocator
                     .destroy_buffer(image_buffer, &buffer_allocation)
                     .unwrap()
             }));
@@ -133,7 +132,7 @@ fn load_tex_impl(
         let cb: vk::CommandBuffer = cb.cb;
 
         record_image_barrier(
-            vk_device(),
+            &device,
             cb,
             ImageBarrier::new(
                 res_image,
@@ -166,7 +165,7 @@ fn load_tex_impl(
             );
 
             record_image_barrier(
-                vk_device(),
+                &device,
                 cb,
                 ImageBarrier::new(
                     res_image,
@@ -248,7 +247,7 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
 }
 
 #[snoozy]
-pub async fn load_tex_with_params(
+pub async fn load_tex_with_params_snoozy(
     ctx: Context,
     path: &AssetPath,
     params: &TexParams,
@@ -263,7 +262,10 @@ pub async fn load_tex_with_params(
 }
 
 #[snoozy]
-pub async fn make_placeholder_rgba8_tex(_ctx: Context, texel_value: &[u8; 4]) -> Result<Texture> {
+pub async fn make_placeholder_rgba8_tex_snoozy(
+    _ctx: Context,
+    texel_value: &[u8; 4],
+) -> Result<Texture> {
     let image_dimensions = (1, 1);
     let internal_format = vk::Format::R8G8B8A8_UNORM;
 

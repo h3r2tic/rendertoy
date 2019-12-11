@@ -72,8 +72,7 @@ impl TransientResource for Buffer {
                     .sharing_mode(vk::SharingMode::EXCLUSIVE)
                     .build();
 
-                vk_all()
-                    .allocator
+                vk().allocator
                     .create_buffer(&buffer_info, &mem_info)
                     .expect("vma::create_buffer")
             };
@@ -89,7 +88,7 @@ impl TransientResource for Buffer {
                 .create_buffer_view(&view_info.build(), None)
                 .expect("create_buffer_view");
 
-            let bindless_index = vk_all().register_buffer_bindless_index(view);
+            let bindless_index = vk().register_buffer_bindless_index(view);
 
             BufferAllocation {
                 view,

@@ -18,9 +18,12 @@ pub fn create_gpu_query(name: &str) -> GpuProfilerQueryId {
     GPU_PROFILER.lock().unwrap().create_gpu_query(name)
 }
 
-pub fn report_durations_ticks(durations: impl Iterator<Item = (GpuProfilerQueryId, u64)>) {
+pub fn report_durations_ticks(
+    ns_per_tick: f32,
+    durations: impl Iterator<Item = (GpuProfilerQueryId, u64)>,
+) {
     let mut prof = GPU_PROFILER.lock().unwrap();
-    prof.report_durations_ticks(durations);
+    prof.report_durations_ticks(ns_per_tick, durations);
 }
 
 pub fn forget_queries(queries: impl Iterator<Item = GpuProfilerQueryId>) {
@@ -124,13 +127,9 @@ impl GpuProfiler {
 
     fn report_durations_ticks(
         &mut self,
+        ns_per_tick: f32,
         durations: impl Iterator<Item = (GpuProfilerQueryId, u64)>,
     ) {
-        let ns_per_tick = unsafe { crate::vulkan::vk_all() }
-            .device_properties
-            .limits
-            .timestamp_period;
-
         for (query_id, duration_ticks) in durations {
             // Remove the finished queries from the active list
             let q = self.active_queries.remove(&query_id).unwrap();

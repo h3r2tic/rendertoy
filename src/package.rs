@@ -8,7 +8,7 @@ pub struct CargoPackageMap {
 }
 
 #[snoozy]
-pub async fn load_cargo_package_map(_ctx: Context) -> Result<CargoPackageMap> {
+pub async fn load_cargo_package_map_snoozy(_ctx: Context) -> Result<CargoPackageMap> {
     let metadata = MetadataCommand::new()
         .manifest_path("./Cargo.toml")
         .exec()
@@ -39,7 +39,7 @@ pub async fn load_cargo_package_map(_ctx: Context) -> Result<CargoPackageMap> {
 pub struct CargoDependencyPath(pub String);
 
 #[snoozy]
-pub async fn get_cargo_package_dep_path(
+pub async fn get_cargo_package_dep_path_snoozy(
     ctx: Context,
     package: &String,
 ) -> Result<CargoDependencyPath> {
