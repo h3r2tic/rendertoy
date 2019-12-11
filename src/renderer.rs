@@ -2,7 +2,7 @@ use crate::gpu_debugger;
 use crate::gpu_profiler::{self, GpuProfilerStats};
 use crate::shader;
 use crate::vulkan;
-use ash::{vk, vk::Format};
+use ash::vk;
 use std::sync::Arc;
 
 pub struct Renderer {
@@ -43,7 +43,6 @@ impl Renderer {
     ) -> RenderFrameResult {
         use crate::vulkan::*;
         use ash::version::DeviceV1_0;
-        use imgui::im_str;
 
         if crate::vulkan::vk().swapchain.is_none() {
             return self.resize();
