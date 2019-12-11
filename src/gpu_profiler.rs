@@ -31,9 +31,9 @@ pub fn forget_queries(queries: impl Iterator<Item = GpuProfilerQueryId>) {
     prof.forget_queries(queries);
 }
 
-pub fn end_frame(gfx: &crate::Gfx) {
+pub fn end_frame() {
     let mut prof = GPU_PROFILER.lock().unwrap();
-    prof.end_frame(gfx);
+    prof.end_frame();
 }
 
 pub fn with_stats<F: FnOnce(&GpuProfilerStats)>(f: F) {
@@ -144,7 +144,7 @@ impl GpuProfiler {
         }
     }
 
-    fn end_frame(&mut self, gfx: &crate::Gfx) {
+    fn end_frame(&mut self) {
         self.stats.order.clear();
         self.stats.order.extend(self.frame_query_ids.drain(..));
     }

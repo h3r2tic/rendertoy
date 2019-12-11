@@ -13,11 +13,13 @@ mod gui;
 mod keyboard;
 mod mesh;
 mod package;
+mod renderer;
 mod rgb9e5;
 mod shader;
 mod texture;
 mod viewport;
 mod vulkan;
+mod warnings;
 
 pub extern crate tracing;
 
@@ -38,6 +40,7 @@ pub use self::texture::*;
 pub use self::viewport::*;
 pub use self::vulkan::VkKitchenSink;
 pub use ash::{vk, vk::Format};
+pub use warnings::rtoy_show_warning;
 
 use imgui::im_str;
 use tokio::runtime::Runtime;
@@ -72,15 +75,15 @@ extern crate abomonation_derive;
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 
+use self::renderer::Renderer;
 use clap::ArgMatches;
 use gpu_profiler::GpuProfilerStats;
 use gui::ImGuiBackend;
 use std::str::FromStr;
+use std::sync::Arc;
 
-pub struct Rendertoy {
+struct RendertoyState {
     rt: Runtime,
-    window: winit::Window,
-    events_loop: winit::EventsLoop,
     mouse_state: MouseState,
     cfg: RendertoyConfig,
     keyboard: KeyboardState,
@@ -91,15 +94,18 @@ pub struct Rendertoy {
     show_gui: bool,
     average_frame_time: f32,
     frame_time_display_cooldown: f32,
-    imgui: imgui::Context,
-    imgui_backend: ImGuiBackend,
-    gpu_profiler_stats: Option<GpuProfilerStats>,
     dump_next_frame_dot_graph: bool,
-    swapchain_acquired_semaphore_idx: usize,
-    present_descriptor_sets: Vec<vk::DescriptorSet>,
-    present_pipeline: shader::ComputePipeline,
     initialization_instant: std::time::Instant,
     time_to_first_frame: Option<std::time::Duration>,
+}
+
+pub struct Rendertoy {
+    state: RendertoyState,
+    renderer: crate::renderer::Renderer,
+    imgui_backend: ImGuiBackend,
+    imgui: imgui::Context,
+    window: Arc<winit::Window>,
+    events_loop: winit::EventsLoop,
 }
 
 #[derive(Clone)]
@@ -183,7 +189,7 @@ impl RendertoyConfig {
 }
 
 impl Rendertoy {
-    pub fn new_with_config(cfg: RendertoyConfig) -> Rendertoy {
+    pub fn new_with_config(cfg: RendertoyConfig) -> Self {
         let rt = Runtime::new().unwrap();
         tracing_subscriber::fmt::init();
 
@@ -197,94 +203,37 @@ impl Rendertoy {
             ))
             .build(&events_loop)
             .expect("window");
+        let window = Arc::new(window);
 
-        crate::vulkan::initialize_vk_state(
-            VkKitchenSink::new(&window, cfg.graphics_debugging, cfg.vsync).unwrap(),
-        );
+        let renderer = Renderer::new(window.clone(), cfg.graphics_debugging, cfg.vsync);
 
         let mut imgui = imgui::Context::create();
         let mut imgui_backend = ImGuiBackend::new(&window, &mut imgui);
         imgui_backend.create_graphics_resources();
 
-        let (present_descriptor_sets, present_pipeline) =
-            Self::create_present_descriptor_sets_and_pipeline();
-
-        Self {
-            rt,
+        Rendertoy {
+            state: RendertoyState {
+                rt,
+                mouse_state: MouseState::default(),
+                cfg,
+                keyboard: KeyboardState::new(),
+                selected_debug_name: None,
+                locked_debug_name: None,
+                last_frame_instant: std::time::Instant::now(),
+                dt: 0.0,
+                show_gui: true,
+                average_frame_time: 0.0,
+                frame_time_display_cooldown: 0.0,
+                dump_next_frame_dot_graph: false,
+                initialization_instant: std::time::Instant::now(),
+                time_to_first_frame: None,
+            },
+            renderer,
+            imgui_backend,
+            imgui,
             window,
             events_loop,
-            mouse_state: MouseState::default(),
-            cfg,
-            keyboard: KeyboardState::new(),
-            selected_debug_name: None,
-            locked_debug_name: None,
-            last_frame_instant: std::time::Instant::now(),
-            dt: 0.0,
-            show_gui: true,
-            average_frame_time: 0.0,
-            frame_time_display_cooldown: 0.0,
-            imgui,
-            imgui_backend,
-            gpu_profiler_stats: None,
-            dump_next_frame_dot_graph: false,
-            swapchain_acquired_semaphore_idx: 0,
-            present_descriptor_sets,
-            present_pipeline,
-            initialization_instant: std::time::Instant::now(),
-            time_to_first_frame: None,
         }
-    }
-
-    fn create_present_descriptor_sets_and_pipeline(
-    ) -> (Vec<vk::DescriptorSet>, shader::ComputePipeline) {
-        use ash::version::DeviceV1_0;
-        use vulkan::*;
-        let vk = vk();
-
-        let present_descriptor_set_layout = unsafe {
-            vk.device
-                .create_descriptor_set_layout(
-                    &vk::DescriptorSetLayoutCreateInfo::builder()
-                        .bindings(&[
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(0)
-                                .build(),
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(1)
-                                .build(),
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(2)
-                                .build(),
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_count(1)
-                                .descriptor_type(vk::DescriptorType::SAMPLER)
-                                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                                .binding(3)
-                                .immutable_samplers(&[vk.samplers[vulkan::SAMPLER_LINEAR]])
-                                .build(),
-                        ])
-                        .build(),
-                    None,
-                )
-                .unwrap()
-        };
-
-        let present_descriptor_sets =
-            vk.create_present_descriptor_sets(present_descriptor_set_layout);
-        let present_pipeline =
-            create_present_compute_pipeline(&vk.device, present_descriptor_set_layout)
-                .expect("create_present_compute_pipeline");
-
-        (present_descriptor_sets, present_pipeline)
     }
 
     pub fn new() -> Rendertoy {
@@ -319,11 +268,11 @@ impl Rendertoy {
     }
 
     pub fn width(&self) -> u32 {
-        self.cfg.width
+        self.state.cfg.width
     }
 
     pub fn height(&self) -> u32 {
-        self.cfg.height
+        self.state.cfg.height
     }
 
     fn next_frame(&mut self) -> bool {
@@ -342,7 +291,7 @@ impl Rendertoy {
         let mut running = true;
 
         let mut keyboard_events: Vec<KeyboardInput> = Vec::new();
-        let mut new_mouse_state = self.mouse_state.clone();
+        let mut new_mouse_state = self.state.mouse_state.clone();
 
         let gui_want_capture_mouse = self.imgui.io().want_capture_mouse;
 
@@ -354,7 +303,7 @@ impl Rendertoy {
                     winit::WindowEvent::KeyboardInput { input, .. } => {
                         if input.virtual_keycode == Some(VirtualKeyCode::Tab) {
                             if input.state == ElementState::Pressed {
-                                self.show_gui = !self.show_gui;
+                                self.state.show_gui = !self.state.show_gui;
                             }
                         } else {
                             keyboard_events.push(*input);
@@ -391,29 +340,112 @@ impl Rendertoy {
             }
         }
 
-        self.keyboard.update(keyboard_events, self.dt);
-        self.mouse_state.update(&new_mouse_state);
+        self.state.keyboard.update(keyboard_events, self.state.dt);
+        self.state.mouse_state.update(&new_mouse_state);
 
         running
     }
 
+    pub fn draw_forever(mut self, mut callback: impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
+        let mut running = true;
+        while running {
+            let window_size_pixels = {
+                let size = self
+                    .window
+                    .get_inner_size()
+                    .map(|s| s.to_physical(self.window.get_hidpi_factor()))
+                    .unwrap_or(winit::dpi::PhysicalSize::new(1.0, 1.0));
+                (size.width as u32, size.height as u32)
+            };
+
+            let state = &mut self.state;
+            let window = &self.window;
+            let imgui = &mut self.imgui;
+            let imgui_backend = &mut self.imgui_backend;
+
+            let render_result = self.renderer.render_frame(|renderer| {
+                let vk = self::vulkan::vk();
+
+                let final_texture = state.draw_with_frame_snapshot(window_size_pixels, &mut callback);
+                let cb = vk.current_frame().command_buffer.lock().unwrap();
+                let cb = cb.cb;
+
+                let currently_debugged_texture = state.get_currently_debugged_texture().clone();
+                let ui = imgui_backend
+                    .prepare_frame(&window, imgui, state.dt);
+                {
+                    if state.show_gui {
+                        state.dump_next_frame_dot_graph =
+                            ui.button(im_str!("Dump frame.dot"), [0.0, 0.0]);
+                        ui.spacing();
+
+                        if ui
+                            .collapsing_header(im_str!("GPU passes"))
+                            .default_open(true)
+                            .build()
+                        {
+                            if let Some(stats) = renderer.get_gpu_profiler_stats() {
+                                state.selected_debug_name = RendertoyState::draw_profiling_stats(
+                                    &ui,
+                                    state.average_frame_time,
+                                    state.time_to_first_frame,
+                                    stats,
+                                    &currently_debugged_texture,
+                                );
+                            }
+                        }
+
+                        self::warnings::with_drain_warnings(|warnings| {
+                            if !warnings.is_empty() {
+                                if ui
+                                    .collapsing_header(&im_str!(
+                                        "Warnings ({})###warnings",
+                                        warnings.len()
+                                    ))
+                                    .default_open(false)
+                                    .build()
+                                {
+                                    warnings.sort();
+                                    for warning in warnings.drain(..) {
+                                        ui.text(warning);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+                let gui_texture_view = imgui_backend
+                    .render(&window, ui, cb)
+                    .expect("gui texture");
+
+                (final_texture, gui_texture_view)
+            });
+
+            if let renderer::RenderFrameResult::SwapchainRecreated = render_result {
+                imgui_backend.destroy_graphics_resources();
+                imgui_backend.create_graphics_resources();
+            }
+
+            running = self.next_frame();
+        }
+    }
+}
+
+impl RendertoyState {
     fn get_currently_debugged_texture(&self) -> Option<String> {
         self.selected_debug_name
             .clone()
             .or(self.locked_debug_name.clone())
     }
 
-    fn draw_with_frame_snapshot<F>(&mut self, callback: &mut F) -> vk::ImageView
+    fn draw_with_frame_snapshot<F>(
+        &mut self,
+        window_size_pixels: (u32, u32),
+        callback: &mut F,
+    ) -> vk::ImageView
     where
         F: FnMut(&FrameState) -> SnoozyRef<Texture>,
     {
-        let size = self
-            .window
-            .get_inner_size()
-            .map(|s| s.to_physical(self.window.get_hidpi_factor()))
-            .unwrap_or(winit::dpi::PhysicalSize::new(1.0, 1.0));
-        let window_size_pixels = (size.width as u32, size.height as u32);
-
         let now = std::time::Instant::now();
         let dt = now - self.last_frame_instant;
         self.last_frame_instant = now;
@@ -558,294 +590,6 @@ impl Rendertoy {
 
         selected_name
     }
-
-    pub fn draw_forever(mut self, mut callback: impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
-        let mut running = true;
-        while running {
-            if crate::vulkan::vk().swapchain.is_some() {
-                self.render_frame(&mut callback);
-            } else {
-                self.resize();
-            }
-
-            running = self.next_frame();
-        }
-    }
-
-    fn resize(&mut self) {
-        let logical_size = self.window.get_inner_size().unwrap();
-        let dpi_factor = self.window.get_hidpi_factor();
-        let phys_size = logical_size.to_physical(dpi_factor);
-
-        self.imgui_backend.destroy_graphics_resources();
-
-        if crate::vulkan::vk_resize(phys_size.width as u32, phys_size.height as u32) {
-            self.imgui_backend.create_graphics_resources();
-        }
-    }
-
-    fn render_frame(&mut self, callback: &mut impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
-        use ash::version::DeviceV1_0;
-        use vulkan::*;
-
-        let present_index = {
-            let vk = vk();
-            let swapchain = vk.swapchain.as_ref().unwrap();
-
-            self.swapchain_acquired_semaphore_idx =
-                (self.swapchain_acquired_semaphore_idx + 1) % vk.frame_data.len();
-
-            let present_index = unsafe {
-                let (present_index, _) = {
-                    match vk.swapchain_loader.acquire_next_image(
-                        swapchain.swapchain,
-                        std::u64::MAX,
-                        swapchain.swapchain_acquired_semaphores
-                            [self.swapchain_acquired_semaphore_idx],
-                        vk::Fence::null(),
-                    ) {
-                        Ok(res) => res,
-                        Err(err)
-                            if err == vk::Result::ERROR_OUT_OF_DATE_KHR
-                                || err == vk::Result::SUBOPTIMAL_KHR =>
-                        {
-                            self.resize();
-
-                            // Try again
-                            return;
-                        }
-                        err @ _ => {
-                            panic!("Could not acquire swapchain image: {:?}", err);
-                        }
-                    }
-                };
-
-                present_index as usize
-            };
-
-            present_index
-        };
-
-        with_vk_mut(|vk| vk.begin_frame(present_index));
-        let current_frame_data_idx;
-
-        let (wait_semaphore, signal_semaphore) = {
-            let vk = vk();
-            let swapchain = vk.swapchain.as_ref().unwrap();
-
-            current_frame_data_idx = present_index;
-            assert_eq!(vk.current_frame_data_idx, Some(current_frame_data_idx));
-
-            (
-                swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx],
-                swapchain.rendering_complete_semaphores[current_frame_data_idx],
-            )
-        };
-
-        record_submit_commandbuffer(
-            &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
-            &[wait_semaphore],
-            &[signal_semaphore],
-            |vk| {
-                let swapchain = vk.swapchain.as_ref().unwrap();
-                let present_image = swapchain.present_images[current_frame_data_idx];
-
-                record_image_barrier(
-                    &vk.device,
-                    vk.current_frame().command_buffer.lock().unwrap().cb,
-                    ImageBarrier::new(
-                        present_image,
-                        vk_sync::AccessType::Present,
-                        vk_sync::AccessType::ComputeShaderWrite,
-                    )
-                    .with_discard(true),
-                );
-
-                let final_texture = self.draw_with_frame_snapshot(callback);
-                let cb = vk.current_frame().command_buffer.lock().unwrap();
-                let cb = cb.cb;
-
-                let currently_debugged_texture = self.get_currently_debugged_texture().clone();
-                let ui = self
-                    .imgui_backend
-                    .prepare_frame(&self.window, &mut self.imgui, self.dt);
-                {
-                    if self.show_gui {
-                        self.dump_next_frame_dot_graph =
-                            ui.button(im_str!("Dump frame.dot"), [0.0, 0.0]);
-                        ui.spacing();
-
-                        if ui
-                            .collapsing_header(im_str!("GPU passes"))
-                            .default_open(true)
-                            .build()
-                        {
-                            if let Some(ref stats) = self.gpu_profiler_stats {
-                                self.selected_debug_name = Self::draw_profiling_stats(
-                                    &ui,
-                                    self.average_frame_time,
-                                    self.time_to_first_frame,
-                                    stats,
-                                    &currently_debugged_texture,
-                                );
-                            }
-                        }
-
-                        let mut warnings = RTOY_WARNINGS.lock().unwrap();
-                        if !warnings.is_empty() {
-                            if ui
-                                .collapsing_header(&im_str!(
-                                    "Warnings ({})###warnings",
-                                    warnings.len()
-                                ))
-                                .default_open(false)
-                                .build()
-                            {
-                                warnings.sort();
-                                for warning in warnings.drain(..) {
-                                    ui.text(warning);
-                                }
-                            } else {
-                                warnings.clear();
-                            }
-                        }
-                    }
-                }
-                let gui_texture_view = self
-                    .imgui_backend
-                    .render(&self.window, ui, cb)
-                    .expect("gui texture");
-
-                unsafe {
-                    vk.device.update_descriptor_sets(
-                        &[
-                            vk::WriteDescriptorSet::builder()
-                                .dst_set(self.present_descriptor_sets[present_index])
-                                .dst_binding(0)
-                                .dst_array_element(0)
-                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                .image_info(&[vk::DescriptorImageInfo::builder()
-                                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                    .image_view(final_texture)
-                                    .build()])
-                                .build(),
-                            vk::WriteDescriptorSet::builder()
-                                .dst_set(self.present_descriptor_sets[present_index])
-                                .dst_binding(1)
-                                .dst_array_element(0)
-                                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                                .image_info(&[vk::DescriptorImageInfo::builder()
-                                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                                    .image_view(gui_texture_view)
-                                    .build()])
-                                .build(),
-                            vk::WriteDescriptorSet::builder()
-                                .dst_set(self.present_descriptor_sets[present_index])
-                                .dst_binding(2)
-                                .dst_array_element(0)
-                                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                                .image_info(&[vk::DescriptorImageInfo::builder()
-                                    .image_layout(vk::ImageLayout::GENERAL)
-                                    .image_view(
-                                        swapchain.present_image_views[current_frame_data_idx],
-                                    )
-                                    .build()])
-                                .build(),
-                        ],
-                        &[],
-                    );
-
-                    vk.device.cmd_bind_pipeline(
-                        cb,
-                        vk::PipelineBindPoint::COMPUTE,
-                        self.present_pipeline.pipeline,
-                    );
-                    vk.device.cmd_bind_descriptor_sets(
-                        cb,
-                        vk::PipelineBindPoint::COMPUTE,
-                        self.present_pipeline.pipeline_layout,
-                        0,
-                        &[self.present_descriptor_sets[present_index]],
-                        &[],
-                    );
-                    let output_size_pixels = vk.swapchain_size_pixels();
-                    let push_constants: (f32, f32) = (
-                        1.0 / output_size_pixels.0 as f32,
-                        1.0 / output_size_pixels.1 as f32,
-                    );
-                    vk.device.cmd_push_constants(
-                        cb,
-                        self.present_pipeline.pipeline_layout,
-                        vk::ShaderStageFlags::COMPUTE,
-                        0,
-                        std::slice::from_raw_parts(
-                            &push_constants.0 as *const f32 as *const u8,
-                            2 * 4,
-                        ),
-                    );
-                    vk.device.cmd_dispatch(
-                        cb,
-                        (output_size_pixels.0 + 7) / 8,
-                        (output_size_pixels.1 + 7) / 8,
-                        1,
-                    );
-                }
-
-                record_image_barrier(
-                    &vk.device,
-                    cb,
-                    ImageBarrier::new(
-                        present_image,
-                        vk_sync::AccessType::ComputeShaderWrite,
-                        vk_sync::AccessType::Present,
-                    ),
-                );
-            },
-        );
-
-        let vk = vk();
-        let swapchain = vk.swapchain.as_ref().unwrap();
-        let wait_semaphores = [swapchain.rendering_complete_semaphores[current_frame_data_idx]];
-        let swapchains = [swapchain.swapchain];
-        let image_indices = [present_index as u32];
-        let present_info = vk::PresentInfoKHR::builder()
-            .wait_semaphores(&wait_semaphores)
-            .swapchains(&swapchains)
-            .image_indices(&image_indices);
-
-        unsafe {
-            match vk
-                .swapchain_loader
-                .queue_present(vk.present_queue, &present_info)
-            {
-                Ok(_) => (),
-                Err(err)
-                    if err == vk::Result::ERROR_OUT_OF_DATE_KHR
-                        || err == vk::Result::SUBOPTIMAL_KHR =>
-                {
-                    // Handled it in the next frame
-                }
-                err @ _ => {
-                    panic!("Could not acquire swapchain image: {:?}", err);
-                }
-            }
-        }
-
-        let gfx = Gfx {}; // TODO
-        gpu_profiler::end_frame(&gfx);
-        gpu_debugger::end_frame();
-
-        self.gpu_profiler_stats = Some(gpu_profiler::get_stats());
-    }
-}
-
-lazy_static! {
-    static ref RTOY_WARNINGS: std::sync::Mutex<Vec<String>> =
-        { std::sync::Mutex::new(Default::default()) };
-}
-
-pub fn rtoy_show_warning(text: String) {
-    RTOY_WARNINGS.lock().unwrap().push(text);
 }
 
 impl TextureKey {
@@ -917,63 +661,6 @@ impl AddRenderPass for RenderPassList {
     fn add<P: RenderPassAny + 'static>(&mut self, pass: P) -> &P {
         self.push(Box::new(pass));
         self.last().unwrap().as_any().downcast_ref::<P>().unwrap()
-    }
-}
-
-// TODO
-pub struct Gfx {}
-
-fn create_present_compute_pipeline(
-    vk_device: &ash::Device,
-    descriptor_set_layout: vk::DescriptorSetLayout,
-) -> snoozy::Result<crate::shader::ComputePipeline> {
-    use ash::version::DeviceV1_0;
-    use std::ffi::CString;
-    use std::io::Cursor;
-
-    let shader_entry_name = CString::new("main").unwrap();
-    let mut shader_spv = Cursor::new(&include_bytes!("final_blit.spv")[..]);
-    let shader_code = ash::util::read_spv(&mut shader_spv).expect("Failed to read shader spv");
-
-    let descriptor_set_layouts = [descriptor_set_layout];
-    let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(&descriptor_set_layouts)
-        .push_constant_ranges(&[vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::COMPUTE,
-            offset: 0,
-            size: 2 * 4,
-        }]);
-
-    unsafe {
-        let shader_module = vk_device
-            .create_shader_module(
-                &vk::ShaderModuleCreateInfo::builder().code(&shader_code),
-                None,
-            )
-            .unwrap();
-
-        let stage_create_info = vk::PipelineShaderStageCreateInfo::builder()
-            .module(shader_module)
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .name(&shader_entry_name);
-
-        let pipeline_layout = vk_device
-            .create_pipeline_layout(&layout_create_info, None)
-            .unwrap();
-
-        let pipeline_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(stage_create_info.build())
-            .layout(pipeline_layout);
-
-        // TODO: pipeline cache
-        let pipeline = vk_device
-            .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info.build()], None)
-            .expect("pipeline")[0];
-
-        Ok(crate::shader::ComputePipeline {
-            pipeline_layout,
-            pipeline,
-        })
     }
 }
 
