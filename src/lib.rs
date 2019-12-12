@@ -32,6 +32,8 @@ mod rgb9e5;
 mod shader;
 mod texture;
 mod viewport;
+mod vk_backend_state;
+mod vk_render_device;
 mod vulkan;
 mod warnings;
 
