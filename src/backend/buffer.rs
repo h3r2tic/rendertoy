@@ -77,6 +77,8 @@ impl TransientResource for Buffer {
                     .expect("vma::create_buffer")
             };
 
+            let (vk, vk_state) = vk_all();
+
             let view_format =
                 vk::Format::from_raw(key.texture_format.unwrap_or(vk::Format::R8_UNORM.as_raw()));
 
@@ -84,11 +86,12 @@ impl TransientResource for Buffer {
                 .buffer(buffer)
                 .format(view_format)
                 .range(key.size_bytes as u64);
-            let view = vk_device()
+            let view = vk
+                .device
                 .create_buffer_view(&view_info.build(), None)
                 .expect("create_buffer_view");
 
-            let bindless_index = vk().register_buffer_bindless_index(view);
+            let bindless_index = vk_state.register_buffer_bindless_index(view);
 
             BufferAllocation {
                 view,

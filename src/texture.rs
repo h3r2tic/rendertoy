@@ -73,7 +73,7 @@ fn load_tex_impl(
     use ash::util::Align;
     use ash::version::DeviceV1_0;
 
-    let device = vk_device();
+    let vk = vk();
 
     let image_buffer_info = vk::BufferCreateInfo {
         size: (std::mem::size_of::<u8>() * image_data.len()) as u64,
@@ -87,13 +87,13 @@ fn load_tex_impl(
         ..Default::default()
     };
 
-    let (image_buffer, buffer_allocation, buffer_allocation_info) = vk()
+    let (image_buffer, buffer_allocation, buffer_allocation_info) = vk
         .allocator
         .create_buffer(&image_buffer_info, &buffer_mem_info)
         .expect("vma::create_buffer");
 
     unsafe {
-        let image_ptr = vk()
+        let image_ptr = vk
             .allocator
             .map_memory(&buffer_allocation)
             .expect("mapping an image upload buffer failed")
@@ -105,7 +105,7 @@ fn load_tex_impl(
         );
 
         image_slice.copy_from_slice(image_data);
-        vk().allocator
+        vk.allocator
             .unmap_memory(&buffer_allocation)
             .expect("unmap_memory");
     }
@@ -117,7 +117,7 @@ fn load_tex_impl(
     });
 
     let res_image = res.image;
-    vk_add_setup_command(move |_vk_all, vk_frame| {
+    vk_add_setup_command(move |_vk, vk_frame| {
         vk_frame
             .frame_cleanup
             .lock()
@@ -132,7 +132,7 @@ fn load_tex_impl(
         let cb: vk::CommandBuffer = cb.cb;
 
         record_image_barrier(
-            &device,
+            &vk.device,
             cb,
             ImageBarrier::new(
                 res_image,
@@ -156,7 +156,7 @@ fn load_tex_impl(
             });
 
         unsafe {
-            device.cmd_copy_buffer_to_image(
+            vk.device.cmd_copy_buffer_to_image(
                 cb,
                 image_buffer,
                 res_image,
@@ -165,7 +165,7 @@ fn load_tex_impl(
             );
 
             record_image_barrier(
-                &device,
+                &vk.device,
                 cb,
                 ImageBarrier::new(
                     res_image,

@@ -377,7 +377,7 @@ fn generate_descriptor_set_layouts(
     let mut all_layouts = Vec::new();
     let mut is_dynamic = Vec::new();
 
-    let device = vk_device();
+    let vk = vk();
 
     let entry = Some("main");
     for descriptor_set in refl.enumerate_descriptor_sets(entry)?.iter() {
@@ -479,7 +479,7 @@ fn generate_descriptor_set_layouts(
                     &mut binding_flags,
                 ),
                 ReflectDescriptorType::Sampler => {
-                    immutable_samplers.push(vk().samplers[crate::vulkan::SAMPLER_LINEAR]);
+                    immutable_samplers.push(vk.samplers[crate::vulkan::SAMPLER_LINEAR]);
                     binding_flags.push(vk::DescriptorBindingFlagsEXT::empty());
                     bindings.push(
                         vk::DescriptorSetLayoutBinding::builder()
@@ -504,7 +504,7 @@ fn generate_descriptor_set_layouts(
             .build();
 
         let descriptor_set_layout = unsafe {
-            device
+            vk.device
                 .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::builder()
                         .bindings(&bindings)
@@ -635,8 +635,10 @@ fn load_cs_impl(name: String, source: &[shader_prepper::SourceChunk]) -> Result<
         &refl,
         vk::ShaderStageFlags::COMPUTE,
     ))?;
+
+    let vk = vk();
     let pipeline = create_compute_pipeline(
-        &vk_device(),
+        &vk.device,
         &descriptor_set_layout_info.all_layouts,
         &spirv_binary,
     )?;
@@ -823,10 +825,11 @@ pub async fn make_raster_pipeline_snoozy(
         .subpasses(&subpasses)
         .dependencies(&dependencies);
 
-    let device = vk_device();
+    let vk = vk();
 
     unsafe {
-        let render_pass = device
+        let render_pass = vk
+            .device
             .create_render_pass(&render_pass_create_info, None)
             .unwrap();
 
@@ -855,7 +858,8 @@ pub async fn make_raster_pipeline_snoozy(
         let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(&descriptor_set_layout_info.all_layouts)
             .build();
-        let pipeline_layout = device
+        let pipeline_layout = vk
+            .device
             .create_pipeline_layout(&layout_create_info, None)
             .unwrap();
 
@@ -866,7 +870,8 @@ pub async fn make_raster_pipeline_snoozy(
             .map(|(sub_shader_idx, sub_shader)| {
                 let code = &shader_modules_code[sub_shader_idx];
                 let shader_info = vk::ShaderModuleCreateInfo::builder().code(code);
-                let shader_module = device
+                let shader_module = vk
+                    .device
                     .create_shader_module(&shader_info, None)
                     .expect("Shader module error");
 
@@ -953,7 +958,8 @@ pub async fn make_raster_pipeline_snoozy(
             .layout(pipeline_layout)
             .render_pass(render_pass);
 
-        let graphics_pipelines = device
+        let graphics_pipelines = vk
+            .device
             .create_graphics_pipelines(
                 vk::PipelineCache::null(),
                 &[graphic_pipeline_info.build()],
@@ -994,7 +1000,7 @@ pub async fn make_raster_pipeline_snoozy(
                 .layers(1)
                 .push_next(&mut imageless_desc);
             fbo_desc.attachment_count = 2;
-            device.create_framebuffer(&fbo_desc, None)?
+            vk.device.create_framebuffer(&fbo_desc, None)?
         };
 
         let graphic_pipeline = graphics_pipelines[0];
@@ -1166,8 +1172,8 @@ fn update_descriptor_sets<'a>(
         ds_writes.clear();
         ds_writes.reserve(uniforms.len());
 
-        let vk = vk();
-        let vk_frame = vk.current_frame();
+        let vk_state = vk_state();
+        let vk_frame = vk_state.current_frame();
 
         for refl in refl {
             let entry = Some("main");
@@ -1450,8 +1456,8 @@ pub async fn compute_tex_snoozy(
         },
     });
 
-    let vk = vk();
-    let vk_frame = vk.current_frame();
+    let (vk, vk_state) = vk_all();
+    let vk_frame = vk_state.current_frame();
 
     let mut flattened_uniforms: HashMap<String, ResolvedShaderUniformPayload> = HashMap::new();
     flatten_uniforms(uniforms, &mut |e| {
@@ -1514,11 +1520,11 @@ pub async fn compute_tex_snoozy(
         let mut descriptor_sets = descriptor_sets;
 
         for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-            descriptor_sets[*idx] = Some(vk.bindless_buffers_descriptor_set);
+            descriptor_sets[*idx] = Some(vk_state.bindless_buffers_descriptor_set);
         }
 
         for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-            descriptor_sets[*idx] = Some(vk.bindless_images_descriptor_set);
+            descriptor_sets[*idx] = Some(vk_state.bindless_images_descriptor_set);
         }
 
         let descriptor_sets: Vec<_> = descriptor_sets.into_iter().map(Option::unwrap).collect();
@@ -1596,8 +1602,8 @@ pub async fn raster_tex_snoozy(
 
     //println!("---- raster_tex: ----");
 
-    let vk = vk();
-    let vk_frame = vk.current_frame();
+    let (vk, vk_state) = vk_all();
+    let vk_frame = vk_state.current_frame();
 
     let cb = vk_frame.command_buffer.lock().unwrap();
     let cb: vk::CommandBuffer = cb.cb;
@@ -1628,7 +1634,7 @@ pub async fn raster_tex_snoozy(
             },
         ];
 
-        let texture_attachments = [output_tex.rt_view, vk.depth_image_view];
+        let texture_attachments = [output_tex.rt_view, vk_state.depth_image_view];
         let mut pass_attachment_desc =
             vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(&texture_attachments);
 
@@ -1713,11 +1719,11 @@ pub async fn raster_tex_snoozy(
             let mut descriptor_sets = descriptor_sets;
 
             for idx in ds_update_result.all_buffers_descriptor_set_idx.iter() {
-                descriptor_sets[*idx] = Some(vk.bindless_buffers_descriptor_set);
+                descriptor_sets[*idx] = Some(vk_state.bindless_buffers_descriptor_set);
             }
 
             for idx in ds_update_result.all_textures_descriptor_set_idx.iter() {
-                descriptor_sets[*idx] = Some(vk.bindless_images_descriptor_set);
+                descriptor_sets[*idx] = Some(vk_state.bindless_images_descriptor_set);
             }
 
             let descriptor_sets: Vec<_> = descriptor_sets.into_iter().map(Option::unwrap).collect();

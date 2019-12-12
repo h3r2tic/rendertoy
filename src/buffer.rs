@@ -79,6 +79,7 @@ where
     let size_bytes = contents.len() * size_of_t;
     let res = backend::buffer::create_buffer(BufferKey::new(size_bytes, texture_format));
 
+    let vk = vk();
     let (staging_buffer, staging_allocation, _staging_allocation_info) = {
         let usage: vk::BufferUsageFlags = vk::BufferUsageFlags::TRANSFER_SRC;
 
@@ -93,21 +94,21 @@ where
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .build();
 
-        vk().allocator
+        vk.allocator
             .create_buffer(&buffer_info, &mem_info)
             .expect("vma::create_buffer")
     };
 
     unsafe {
         let mapped_ptr =
-            vk().allocator
+            vk.allocator
                 .map_memory(&staging_allocation)
                 .expect("mapping a staging buffer failed") as *mut std::ffi::c_void;
 
         std::slice::from_raw_parts_mut(mapped_ptr as *mut u8, size_bytes).copy_from_slice(
             &std::slice::from_raw_parts(contents.as_ptr() as *const u8, size_bytes),
         );
-        vk().allocator
+        vk.allocator
             .unmap_memory(&staging_allocation)
             .expect("unmap_memory");
     }

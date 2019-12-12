@@ -2,7 +2,7 @@ use crate::gpu_debugger;
 use crate::gpu_profiler::GpuProfilerStats;
 use crate::gui::ImGuiBackend;
 use crate::keyboard::*;
-use crate::renderer::{RenderFrameResult, Renderer};
+use crate::renderer::{RenderFrameStatus, Renderer};
 use crate::texture::{Texture, TextureKey};
 use crate::vulkan;
 use crate::{Point2, Vector2};
@@ -296,11 +296,11 @@ impl Rendertoy {
             let imgui_backend = &mut self.imgui_backend;
 
             let render_result = self.renderer.render_frame(|renderer| {
-                let vk = self::vulkan::vk();
+                let vk_state = self::vulkan::vk_state();
 
                 let final_texture =
                     state.draw_with_frame_snapshot(window_size_pixels, &mut callback);
-                let cb = vk.current_frame().command_buffer.lock().unwrap();
+                let cb = vk_state.current_frame().command_buffer.lock().unwrap();
                 let cb = cb.cb;
 
                 let currently_debugged_texture = state.get_currently_debugged_texture().clone();
@@ -351,7 +351,7 @@ impl Rendertoy {
                 (final_texture, gui_texture_view)
             });
 
-            if let RenderFrameResult::SwapchainRecreated = render_result {
+            if let RenderFrameStatus::SwapchainRecreated = render_result {
                 imgui_backend.destroy_graphics_resources();
                 imgui_backend.create_graphics_resources();
             }

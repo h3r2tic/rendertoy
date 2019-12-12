@@ -171,7 +171,7 @@ impl ImageResource {
                 })
         };
 
-        let device = vk_device();
+        let device = vk().device.clone();
 
         {
             let mut view_usage = vk::ImageViewUsageCreateInfo::builder().usage(readonly_usage);
@@ -260,7 +260,7 @@ impl TransientResource for Texture {
             },
         );
 
-        img.bindless_index = vk().register_image_bindless_index(img.view);
+        img.bindless_index = vk_state().register_image_bindless_index(img.view);
 
         img
         /*unsafe {
