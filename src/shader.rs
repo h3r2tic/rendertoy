@@ -83,7 +83,7 @@ def_shader_uniform_types! {
 impl ShaderUniformValue {
     pub fn resolve<'a>(
         &'a self,
-        ctx: Context,
+        mut ctx: Context,
     ) -> BoxFuture<'a, Result<ResolvedShaderUniformValue>> {
         async move {
             match self {
@@ -764,7 +764,7 @@ unsafe impl Sync for RasterPipeline {}
 
 #[snoozy]
 pub async fn make_raster_pipeline_snoozy(
-    ctx: Context,
+    mut ctx: Context,
     shaders_in: &Vec<SnoozyRef<RasterSubShader>>,
 ) -> Result<RasterPipeline> {
     use std::ffi::CString;
@@ -1438,7 +1438,7 @@ impl TrackedUniformParamSource {
 
 #[snoozy]
 pub async fn compute_tex_snoozy(
-    ctx: Context,
+    mut ctx: Context,
     key: &TextureKey,
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
@@ -1583,7 +1583,7 @@ pub async fn compute_tex_snoozy(
 
 #[snoozy]
 pub async fn raster_tex_snoozy(
-    ctx: Context,
+    mut ctx: Context,
     key: &TextureKey,
     raster_pipe: &SnoozyRef<RasterPipeline>,
     uniforms: &Vec<ShaderUniformHolder>,

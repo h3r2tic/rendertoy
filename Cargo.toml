@@ -27,6 +27,7 @@ abomonation = "0.7"
 abomonation_derive = "0.5"
 gltf = "0.14"
 tokio = { version = "0.2.1", features = ["rt-core", "rt-threaded"] }
+#tokio = { version = "0.2.1", features = ["rt-core"] }
 winit = "0.19.5"
 ash-window = { git = "https://github.com/norse-rs/ash-window.git", revision = "9b6ab4d03b015ecae8ec9c771461e80446487ad4" }
 ash = "0.29.0"

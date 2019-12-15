@@ -265,7 +265,7 @@ pub struct RasterGpuMesh {
 
 #[snoozy]
 pub async fn make_raster_mesh_snoozy(
-    ctx: Context,
+    mut ctx: Context,
     mesh: &SnoozyRef<TriangleMesh>,
 ) -> Result<RasterGpuMesh> {
     let mesh = ctx.get(mesh).await?;
@@ -309,7 +309,7 @@ impl Default for GpuMaterial {
     }
 }
 
-async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u32 {
+async fn upload_material_map(mut ctx: Context, map: MeshMaterialMap) -> u32 {
     let tex = match map {
         MeshMaterialMap::Asset {
             ref path,
@@ -327,7 +327,7 @@ async fn upload_material_map(ctx: Context, map: MeshMaterialMap) -> u32 {
 
 #[snoozy]
 pub async fn upload_raster_mesh_snoozy(
-    ctx: Context,
+    mut ctx: Context,
     mesh: &SnoozyRef<RasterGpuMesh>,
 ) -> Result<ShaderUniformBundle> {
     let mesh = ctx.get(mesh).await?;
@@ -346,18 +346,19 @@ pub async fn upload_raster_mesh_snoozy(
     };
 
     let materials: Vec<GpuMaterial> = try_join_all(mesh_materials.into_iter().map(|m| {
-        let ctx = ctx.clone();
-
         // TODO: don't clone all the things
         let mesh_maps = mesh_maps.clone();
+
+        let ctx = ctx.clone();
         tokio::task::spawn(async move {
             let mut res = GpuMaterial::default();
             res.base_color_mult = m.base_color_mult;
 
-            let maps: Vec<_> = try_join_all(m.maps.iter().map(|map_id| {
+            let maps: Vec<_> = try_join_all(m.maps.iter().map(move |map_id| {
+                let ctx = ctx.clone();
                 tokio::task::spawn(
                     // TODO: don't clone all the things
-                    upload_material_map(ctx.clone(), mesh_maps[*map_id as usize].clone()),
+                    upload_material_map(ctx, mesh_maps[*map_id as usize].clone()),
                 )
             }))
             .await

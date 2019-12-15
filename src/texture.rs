@@ -18,7 +18,7 @@ pub struct TexParams {
 }
 
 #[snoozy]
-pub async fn load_tex_snoozy(ctx: Context, path: &AssetPath) -> Result<Texture> {
+pub async fn load_tex_snoozy(mut ctx: Context, path: &AssetPath) -> Result<Texture> {
     let tex = ctx
         .get(load_tex_with_params(
             path.clone(),
@@ -37,7 +37,7 @@ pub struct RawRgba8Image {
 }
 
 #[snoozy(cache)]
-pub async fn load_raw_ldr_tex_snoozy(ctx: Context, path: &AssetPath) -> Result<RawRgba8Image> {
+pub async fn load_raw_ldr_tex_snoozy(mut ctx: Context, path: &AssetPath) -> Result<RawRgba8Image> {
     use image::GenericImageView;
 
     let blob = ctx.get(&load_blob(path.clone())).await?;
@@ -248,7 +248,7 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
 
 #[snoozy]
 pub async fn load_tex_with_params_snoozy(
-    ctx: Context,
+    mut ctx: Context,
     path: &AssetPath,
     params: &TexParams,
 ) -> Result<Texture> {

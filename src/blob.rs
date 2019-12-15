@@ -30,7 +30,7 @@ pub struct AssetPath {
 }
 
 impl AssetPath {
-    pub async fn to_path_lossy(&self, ctx: Context) -> Result<String> {
+    pub async fn to_path_lossy(&self, mut ctx: Context) -> Result<String> {
         let mut file_path: PathBuf = (*ctx
             .get(get_cargo_package_dep_path(self.crate_name.clone()))
             .await?)

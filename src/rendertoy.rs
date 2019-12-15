@@ -279,6 +279,8 @@ impl Rendertoy {
     }
 
     pub fn draw_forever(mut self, mut callback: impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
+        tracing::debug!("Rendertoy::draw_forever");
+
         let mut running = true;
         while running {
             let window_size_pixels = {
@@ -410,7 +412,11 @@ impl RendertoyState {
         let final_texture = {
             let tex = tex.clone();
             self.rt.block_on(async move {
-                let snapshot = get_snapshot();
+                let snapshot = get_snapshot(move |f| {
+                    tokio::task::spawn(async move {
+                        f();
+                    });
+                });
                 let final_texture: Texture = (*snapshot.get(tex).await).clone();
                 final_texture.view
             })
@@ -528,7 +534,9 @@ fn generate_dot_graph_from_snoozy_ref(
     ops_to_skip: &[&'static str],
     dot_graph_attribs: Option<&'static str>,
 ) -> String {
-    let should_include_op = |op: &OpaqueSnoozyRef| {
+    use snoozy::{OpaqueSnoozyRefInner, SnoozyRefDependency};
+
+    let should_include_op = |op: &SnoozyRefDependency| {
         let op_name = op.recipe_info.read().unwrap().recipe_meta.op_name;
 
         !ops_to_skip.contains(&op_name)
@@ -537,11 +545,10 @@ fn generate_dot_graph_from_snoozy_ref(
                 .unwrap_or(true)
     };
 
-    let get_node_name = |r: &OpaqueSnoozyRef| -> String {
+    let get_node_name = |r: &OpaqueSnoozyRefInner| -> String {
         let info = r.recipe_info.read().unwrap();
         if let Some(ref build_record) = info.build_record {
-            if let Some(ref debug_name) = build_record.last_valid_build_result.debug_info.debug_name
-            {
+            if let Some(ref debug_name) = build_record.build_result.debug_info.debug_name {
                 return debug_name.clone();
             }
         }
@@ -553,14 +560,14 @@ fn generate_dot_graph_from_snoozy_ref(
     use std::collections::HashMap;
 
     let mut node_indices: HashMap<usize, _> = HashMap::new();
-    let root_name = get_node_name(&root);
+    let root_name = get_node_name(&root.inner);
 
     let mut graph = Graph::<String, String>::new();
     let root_idx = graph.add_node(root_name);
     node_indices.insert(root.get_transient_op_id(), root_idx);
 
-    let mut stack: Vec<(OpaqueSnoozyRef, _)> = Vec::new();
-    stack.push((root, root_idx));
+    let mut stack: Vec<(SnoozyRefDependency, _)> = Vec::new();
+    stack.push((SnoozyRefDependency(root.inner), root_idx));
 
     while let Some((r, r_idx)) = stack.pop() {
         let info = r.recipe_info.read().unwrap();

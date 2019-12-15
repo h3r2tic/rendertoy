@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct ImageFilterUniform {
-    pub name: String,
+    pub name: &'static str,
     pub value: ShaderUniformValue,
 }
 
@@ -17,14 +17,57 @@ pub struct ImageFilterUniform {
 pub enum ImageFilterToken {
     Uniform(ImageFilterUniform),
     TextureSample(ImageFilterUniform),
-    Expr(String),
+    Expr(&'static str),
 }
 
-pub fn image_filter_token_join(
+pub fn token_join(
     item: ImageFilterToken,
     mut rest: VecDeque<ImageFilterToken>,
 ) -> VecDeque<ImageFilterToken> {
     rest.push_front(item);
+    rest
+}
+
+pub fn term_token_join(
+    term: ImageFilterTermToken,
+    mut rest: VecDeque<ImageFilterToken>,
+) -> VecDeque<ImageFilterToken> {
+    match term {
+        ImageFilterTermToken::Single(expr) => token_join(expr, rest),
+        ImageFilterTermToken::List(mut list) => {
+            list.append(&mut rest);
+            list
+        }
+    }
+}
+
+pub fn parenthesized(mut tokens: VecDeque<ImageFilterToken>) -> ImageFilterTermToken {
+    tokens.push_front(ImageFilterToken::Expr("("));
+    tokens.push_back(ImageFilterToken::Expr(")"));
+    ImageFilterTermToken::List(tokens)
+}
+
+pub fn texture_sample(
+    name: &'static str,
+    value: ShaderUniformValue,
+    mut rest: VecDeque<ImageFilterToken>,
+) -> VecDeque<ImageFilterToken> {
+    rest.push_front(ImageFilterToken::TextureSample(ImageFilterUniform {
+        name,
+        value,
+    }));
+    rest
+}
+
+pub fn uniform(
+    name: &'static str,
+    value: ShaderUniformValue,
+    mut rest: VecDeque<ImageFilterToken>,
+) -> VecDeque<ImageFilterToken> {
+    rest.push_front(ImageFilterToken::Uniform(ImageFilterUniform {
+        name,
+        value,
+    }));
     rest
 }
 
@@ -52,11 +95,11 @@ impl ImageFilterDesc {
         tokens
             .iter()
             .map(|tok| match tok {
-                ImageFilterToken::Uniform(ImageFilterUniform { name, .. }) => name.clone(),
+                ImageFilterToken::Uniform(ImageFilterUniform { name, .. }) => String::from(*name),
                 ImageFilterToken::TextureSample(ImageFilterUniform { name, .. }) => {
                     format!("texelFetch({}, pix, 0)", name)
                 }
-                ImageFilterToken::Expr(s) => s.clone(),
+                ImageFilterToken::Expr(s) => String::from(*s),
             })
             .collect::<Vec<String>>()
             .concat()
@@ -190,63 +233,43 @@ macro_rules! compute_tex {
     };
     // A texture sample from an interpolated variable; must be a shader uniform
     (@expr @ $var:ident $($tts:tt)*) => {
-        $crate::compute_tex_macro::image_filter_token_join(
-            $crate::compute_tex_macro::ImageFilterToken::TextureSample($crate::compute_tex_macro::ImageFilterUniform {
-                name: stringify!($var).to_owned(),
-                value: $var.clone().into(),
-            }),
+        ctm::texture_sample(
+            stringify!($var),
+            $var.clone().into(),
             compute_tex!(@expr $($tts)*)
         )
     };
     // An interpolated variable; must be a shader uniform
     (@expr # $var:ident $($tts:tt)*) => {
-        $crate::compute_tex_macro::image_filter_token_join(
-            $crate::compute_tex_macro::ImageFilterToken::Uniform($crate::compute_tex_macro::ImageFilterUniform {
-                name: stringify!($var).to_owned(),
-                value: $var.clone().into(),
-            }),
+        ctm::uniform(
+            stringify!($var),
+            $var.clone().into(),
             compute_tex!(@expr $($tts)*)
         )
     };
     // Parenthesized expressions. We must descend in order to perform nested interpolations
     (@term ( $($tts:tt)* ) ) => {
-        {
-            let mut res = compute_tex!(@expr $($tts)*);
-            res.push_front($crate::compute_tex_macro::ImageFilterToken::Expr("(".to_owned()));
-            res.push_back($crate::compute_tex_macro::ImageFilterToken::Expr(")".to_owned()));
-            $crate::compute_tex_macro::ImageFilterTermToken::List(res)
-        }
+        ctm::parenthesized(compute_tex!(@expr $($tts)*))
     };
     // A regular item
     (@term $item:tt ) => {
-        $crate::compute_tex_macro::ImageFilterTermToken::Single(
-            $crate::compute_tex_macro::ImageFilterToken::Expr(stringify!($item).to_owned())
+        ctm::ImageFilterTermToken::Single(
+            ctm::ImageFilterToken::Expr(stringify!($item))
         )
     };
     // Munch a single item. Split off into @term and then process the rest
     (@expr $item:tt $($tts:tt)*) => {
         {
-            let term = compute_tex!(@term $item);
-            match term {
-                $crate::compute_tex_macro::ImageFilterTermToken::Single(expr) => {
-                    $crate::compute_tex_macro::image_filter_token_join(
-                        expr,
-                        compute_tex!(@expr $($tts)*)
-                    )
-                }
-                $crate::compute_tex_macro::ImageFilterTermToken::List(mut list) => {
-                    let mut rest = compute_tex!(@expr $($tts)*);
-                    list.append(&mut rest);
-                    list
-                }
-            }
+            let item = compute_tex!(@term $item);
+            let rest = compute_tex!(@expr $($tts)*);
+            ctm::term_token_join(item, rest)
         }
     };
     (@swizzle $swizzle:ident) => {
-        ".".to_owned() + stringify!($swizzle)
+        concat!(".", stringify!($swizzle))
     };
     (@swizzle) => {
-        "".to_owned()
+        ""
     };
     (@munch_bindings $(# $binding:ident : $value:expr,)*) => {
         $(let $binding = $value.clone();)*
@@ -258,13 +281,14 @@ macro_rules! compute_tex {
         $(. $swizzle:ident)? = $($tts:tt)*
     ) => {
         {
+            use $crate::compute_tex_macro as ctm;
             compute_tex!(@munch_bindings $(# $binding : $binding_value,)*);
 
             let mut tokens = compute_tex!(@expr $($tts)*);
-            let output_str = "_output_color".to_owned() + &compute_tex!(@swizzle $($swizzle)?) + " = ";
-            tokens.push_front($crate::compute_tex_macro::ImageFilterToken::Expr(output_str));
+            let output_str = concat!("_output_color", compute_tex!(@swizzle $($swizzle)?), " = ");
+            tokens.push_front(ctm::ImageFilterToken::Expr(output_str));
 
-            $crate::compute_tex_macro::ImageFilterDesc::new($debug_name.to_owned(), $tex_key, tokens).run()
+            ctm::ImageFilterDesc::new($debug_name.to_owned(), $tex_key, tokens).run()
         }
     };
     () => {
