@@ -150,6 +150,13 @@ impl VkRenderDevice {
 
             let present_queue_family_index = present_queue_family_index as u32;
             let device_properties = instance.get_physical_device_properties(pdevice);
+            unsafe {
+                tracing::info!(
+                    "Using device {:?}",
+                    CStr::from_ptr(device_properties.device_name.as_ptr())
+                );
+            }
+
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
 
             let device_extension_names_raw = vec![
@@ -162,7 +169,7 @@ impl VkRenderDevice {
                 vk::KhrMaintenance3Fn::name().as_ptr(),
                 vk::KhrGetMemoryRequirements2Fn::name().as_ptr(),
                 vk::ExtDescriptorIndexingFn::name().as_ptr(),
-                vk::KhrImagelessFramebufferFn::name().as_ptr(),
+                //vk::KhrImagelessFramebufferFn::name().as_ptr(),
                 vk::KhrImageFormatListFn::name().as_ptr(),
             ];
 

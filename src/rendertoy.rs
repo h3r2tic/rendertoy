@@ -35,6 +35,7 @@ pub struct Rendertoy {
     state: RendertoyState,
     renderer: crate::renderer::Renderer,
     imgui_backend: ImGuiBackend,
+    gui_placeholder_tex: Texture,
     imgui: imgui::Context,
     window: Arc<winit::Window>,
     events_loop: winit::EventsLoop,
@@ -143,6 +144,15 @@ impl Rendertoy {
         let mut imgui_backend = ImGuiBackend::new(&window, &mut imgui);
         imgui_backend.create_graphics_resources();
 
+        let gui_placeholder_tex = {
+            let texel_value = [0u8; 4];
+            let image_dimensions = (1, 1);
+            let internal_format = vk::Format::R8G8B8A8_UNORM;
+
+            crate::texture::load_tex_impl(&texel_value, image_dimensions, internal_format)
+                .expect("gui placeholder texture")
+        };
+
         Rendertoy {
             state: RendertoyState {
                 rt,
@@ -162,6 +172,7 @@ impl Rendertoy {
             },
             renderer,
             imgui_backend,
+            gui_placeholder_tex,
             imgui,
             window,
             events_loop,
@@ -296,6 +307,7 @@ impl Rendertoy {
             let window = &self.window;
             let imgui = &mut self.imgui;
             let imgui_backend = &mut self.imgui_backend;
+            let gui_placeholder_texture_view = self.gui_placeholder_tex.view;
 
             let render_result = self.renderer.render_frame(|renderer| {
                 let vk_state = self::vulkan::vk_state();
@@ -306,9 +318,10 @@ impl Rendertoy {
                 let cb = cb.cb;
 
                 let currently_debugged_texture = state.get_currently_debugged_texture().clone();
-                let ui = imgui_backend.prepare_frame(&window, imgui, state.dt);
-                {
-                    if state.show_gui {
+
+                let gui_texture_view = if state.show_gui {
+                    let ui = imgui_backend.prepare_frame(&window, imgui, state.dt);
+                    {
                         state.dump_next_frame_dot_graph =
                             ui.button(im_str!("Dump frame.dot"), [0.0, 0.0]);
                         ui.spacing();
@@ -347,8 +360,14 @@ impl Rendertoy {
                             }
                         });
                     }
-                }
-                let gui_texture_view = imgui_backend.render(&window, ui, cb).expect("gui texture");
+
+                    let gui_extent = vk_state.swapchain.as_ref().unwrap().surface_resolution;
+                    imgui_backend
+                        .render(&window, (gui_extent.width, gui_extent.height), ui, cb)
+                        .expect("gui texture")
+                } else {
+                    gui_placeholder_texture_view
+                };
 
                 (final_texture, gui_texture_view)
             });

@@ -64,7 +64,7 @@ fn load_ldr_tex(image: &RawRgba8Image, params: &TexParams) -> Result<Texture> {
     load_tex_impl(&image.data, image.dimensions, internal_format)
 }
 
-fn load_tex_impl(
+pub fn load_tex_impl(
     image_data: &[u8],
     image_dimensions: (u32, u32),
     internal_format: vk::Format,

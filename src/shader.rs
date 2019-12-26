@@ -115,7 +115,7 @@ impl ShaderUniformValue {
                 )),
             }
         }
-            .boxed()
+        .boxed()
     }
 }
 

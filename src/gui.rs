@@ -133,6 +133,7 @@ impl ImGuiBackend {
     pub fn render(
         &mut self,
         window: &winit::Window,
+        physical_size: (u32, u32),
         ui: imgui::Ui,
         cb: vk::CommandBuffer,
     ) -> Option<vk::ImageView> {
@@ -164,19 +165,14 @@ impl ImGuiBackend {
                         },
                     }];
 
-                    let extent = window
-                        .get_inner_size()
-                        .map(|s| s.to_physical(window.get_hidpi_factor()))
-                        .unwrap_or(winit::dpi::PhysicalSize::new(1.0, 1.0));
-
                     let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
                         .render_pass(gfx.imgui_render_pass)
                         .framebuffer(gfx.imgui_framebuffer)
                         .render_area(vk::Rect2D {
                             offset: vk::Offset2D { x: 0, y: 0 },
                             extent: vk::Extent2D {
-                                width: extent.width as _,
-                                height: extent.height as _,
+                                width: physical_size.0,
+                                height: physical_size.1,
                             },
                         })
                         .clear_values(&clear_values);
