@@ -97,7 +97,7 @@ impl ImageFilterDesc {
             .map(|tok| match tok {
                 ImageFilterToken::Uniform(ImageFilterUniform { name, .. }) => String::from(*name),
                 ImageFilterToken::TextureSample(ImageFilterUniform { name, .. }) => {
-                    format!("texelFetch({}, pix, 0)", name)
+                    format!("textureLod(sampler2D({}, linear_sampler), uv, 0)", name)
                 }
                 ImageFilterToken::Expr(s) => String::from(*s),
             })
@@ -200,6 +200,7 @@ impl ImageFilterDesc {
         format!(
             "{uniforms}
 uniform restrict writeonly layout(binding = 0) image2D outputTex;
+uniform sampler linear_sampler;
 layout(std140, binding = 1) uniform globals {{
     uniform vec4 outputTex_size;
     {cb}

@@ -176,74 +176,17 @@ pub fn load_tex_impl(
         };
     });
 
-    /*match img {
-        DynamicImage::ImageLuma8(ref img) => make_gl_tex(img, dims, gl::R8, gl::RED),
-        DynamicImage::ImageRgb8(ref img) => make_gl_tex(
-            img,
-            dims,
-            if params.gamma == TexGamma::Linear {
-                gl::RGB8
-            } else {
-                gl::SRGB8
-            },
-            gl::RGB,
-        ),
-        DynamicImage::ImageRgba8(ref img) => make_gl_tex(
-            img,
-            dims,
-            if params.gamma == TexGamma::Linear {
-                gl::RGBA8
-            } else {
-                gl::SRGB8_ALPHA8
-            },
-            gl::RGBA,
-        ),
-        _ => Err(format_err!("Unsupported image format")),
-    }*/
-
     Ok(res)
 }
 
 fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
-    let _img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
-
-    unimplemented!()
-    /*
-    // Flip the image because OpenGL.
-    for y in 0..img.height / 2 {
-        for x in 0..img.width {
-            let y2 = img.height - 1 - y;
-            img.data.swap(y * img.width + x, y2 * img.width + x);
-        }
-    }
+    let img = hdrldr::load(blob.contents.as_slice()).map_err(|e| format_err!("{:?}", e))?;
 
     tracing::info!("Loaded image: {}x{} HDR", img.width, img.height);
 
-    with_gl(|gl| {
-        let res = backend::texture::create_texture(
-            gl,
-            TextureKey {
-                width: img.width as u32,
-                height: img.height as u32,
-                format: gl::RGB32F,
-            },
-        );
-        unsafe {
-            gl.BindTexture(gl::TEXTURE_2D, res.texture_id);
-            gl.TexSubImage2D(
-                gl::TEXTURE_2D,
-                0,
-                0,
-                0,
-                img.width as i32,
-                img.height as i32,
-                gl::RGB,
-                gl::FLOAT,
-                std::mem::transmute(img.data.as_ptr()),
-            );
-        }
-        Ok(res)
-    })*/
+    let byte_count = img.width * img.height * 3 * 4;
+    let data = unsafe { std::slice::from_raw_parts(img.data.as_ptr() as *const u8, byte_count) };
+    load_tex_impl(data, (img.width as u32, img.height as u32), Format::R32G32B32_SFLOAT)
 }
 
 #[snoozy]
