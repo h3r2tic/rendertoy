@@ -20,8 +20,13 @@ pub enum RenderFrameStatus {
 }
 
 impl Renderer {
-    pub fn new(window: Arc<winit::Window>, graphics_debugging: bool, vsync: bool) -> Self {
-        initialize_vulkan_backend(&window, graphics_debugging, vsync);
+    pub fn new(
+        window: Arc<winit::Window>,
+        graphics_debugging: bool,
+        vsync: bool,
+        device_index: usize,
+    ) -> Self {
+        initialize_vulkan_backend(&window, graphics_debugging, vsync, device_index);
 
         let (present_descriptor_sets, present_pipeline) =
             Self::create_present_descriptor_sets_and_pipeline();

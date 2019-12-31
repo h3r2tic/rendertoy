@@ -13,13 +13,14 @@ mod vk_backend_internals {
         window: &winit::Window,
         graphics_debugging: bool,
         vsync: bool,
+        device_index: usize,
     ) {
         unsafe {
             assert!(VK_RENDER_DEVICE.is_none());
             assert!(VK_BACKEND_STATE.is_none());
         }
 
-        let device = VkRenderDevice::new(window, graphics_debugging, vsync)
+        let device = VkRenderDevice::new(window, graphics_debugging, device_index)
             .expect("VkRenderDevice creation failed");
         let bs = VkBackendState::new(&device, window, graphics_debugging, vsync)
             .expect("VkBackendState creation failed");

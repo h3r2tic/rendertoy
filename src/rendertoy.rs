@@ -79,6 +79,7 @@ pub struct RendertoyConfig {
     pub height: u32,
     pub vsync: bool,
     pub graphics_debugging: bool,
+    pub device_index: usize,
 }
 
 fn parse_resolution(s: &str) -> Result<(u32, u32)> {
@@ -112,11 +113,17 @@ impl RendertoyConfig {
 
         let graphics_debugging = !matches.is_present("ndebug");
 
+        let device_index = matches
+            .value_of("device-index")
+            .map(|val| FromStr::from_str(val).expect("Failed to parse device index"))
+            .unwrap_or(0);
+
         RendertoyConfig {
             width,
             height,
             vsync,
             graphics_debugging,
+            device_index,
         }
     }
 }
@@ -138,7 +145,12 @@ impl Rendertoy {
             .expect("window");
         let window = Arc::new(window);
 
-        let renderer = Renderer::new(window.clone(), cfg.graphics_debugging, cfg.vsync);
+        let renderer = Renderer::new(
+            window.clone(),
+            cfg.graphics_debugging,
+            cfg.vsync,
+            cfg.device_index,
+        );
 
         let mut imgui = imgui::Context::create();
         let mut imgui_backend = ImGuiBackend::new(&window, &mut imgui);
@@ -196,14 +208,15 @@ impl Rendertoy {
                     .takes_value(true),
             )
             .arg(
+                clap::Arg::with_name("device-index")
+                    .long("device-index")
+                    .help("Graphics device index")
+                    .takes_value(true),
+            )
+            .arg(
                 clap::Arg::with_name("ndebug")
                     .long("ndebug")
                     .help("Disable graphics debugging"),
-            )
-            .arg(
-                clap::Arg::with_name("core-gl")
-                    .long("core-gl")
-                    .help("Use the Core profile of OpenGL (disables UI)"),
             )
             .get_matches();
 

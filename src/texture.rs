@@ -186,7 +186,11 @@ fn load_hdr_tex(blob: &Blob, _params: &TexParams) -> Result<Texture> {
 
     let byte_count = img.width * img.height * 3 * 4;
     let data = unsafe { std::slice::from_raw_parts(img.data.as_ptr() as *const u8, byte_count) };
-    load_tex_impl(data, (img.width as u32, img.height as u32), Format::R32G32B32_SFLOAT)
+    load_tex_impl(
+        data,
+        (img.width as u32, img.height as u32),
+        Format::R32G32B32_SFLOAT,
+    )
 }
 
 #[snoozy]

@@ -789,7 +789,7 @@ pub async fn make_raster_pipeline_snoozy(
             ..Default::default()
         },
         vk::AttachmentDescription {
-            format: vk::Format::D24_UNORM_S8_UINT,
+            format: vk::Format::D32_SFLOAT,
             samples: vk::SampleCountFlags::TYPE_1,
             load_op: vk::AttachmentLoadOp::CLEAR,
             initial_layout: vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
@@ -803,7 +803,7 @@ pub async fn make_raster_pipeline_snoozy(
     }];
     let depth_attachment_ref = vk::AttachmentReference {
         attachment: 1,
-        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        layout: vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL,
     };
     let dependencies = [vk::SubpassDependency {
         src_subpass: vk::SUBPASS_EXTERNAL,
@@ -986,7 +986,7 @@ pub async fn make_raster_pipeline_snoozy(
                 .width(width as _)
                 .height(height as _)
                 .layer_count(1)
-                .view_formats(&[vk::Format::D24_UNORM_S8_UINT])
+                .view_formats(&[vk::Format::D32_SFLOAT])
                 .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                 .build();
             let attachments = [color_attachment, depth_attachment];

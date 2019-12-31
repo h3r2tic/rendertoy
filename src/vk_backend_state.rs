@@ -95,11 +95,13 @@ impl LinearUniformBuffer {
             let bytes_written = self
                 .write_head
                 .swap(0, std::sync::atomic::Ordering::Relaxed);
+            let alignment = 256; // TODO
+            let bytes_written_pad = (bytes_written + alignment - 1) & !(alignment - 1);
 
             let mapped_ranges = [vk::MappedMemoryRange {
                 memory: self.allocation_info.get_device_memory(),
                 offset: self.allocation_info.get_offset() as vk::DeviceSize,
-                size: bytes_written as vk::DeviceSize,
+                size: bytes_written_pad as vk::DeviceSize,
                 ..Default::default()
             }];
 
@@ -614,7 +616,7 @@ impl VkBackendState {
 
             let depth_image_create_info = vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::D24_UNORM_S8_UINT)
+                .format(vk::Format::D32_SFLOAT)
                 .extent(vk::Extent3D {
                     width: swapchain.surface_resolution.width,
                     height: swapchain.surface_resolution.height,
@@ -660,7 +662,7 @@ impl VkBackendState {
                 record_image_aspect_barrier(
                     &vk.device,
                     cb,
-                    vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
+                    vk::ImageAspectFlags::DEPTH,
                     ImageBarrier::new(
                         depth_image,
                         vk_sync::AccessType::Nothing,

@@ -59,7 +59,7 @@ impl VkRenderDevice {
     pub(crate) fn new(
         window: &winit::Window,
         graphics_debugging: bool,
-        _vsync: bool,
+        device_index: usize,
     ) -> Result<Self, Box<dyn Error>> {
         unsafe {
             let entry = ash::Entry::new()?;
@@ -145,7 +145,7 @@ impl VkRenderDevice {
                         .nth(0)
                 })
                 .filter_map(|v| v)
-                .nth(0)
+                .nth(device_index)
                 .expect("Couldn't find suitable device.");
 
             let present_queue_family_index = present_queue_family_index as u32;
