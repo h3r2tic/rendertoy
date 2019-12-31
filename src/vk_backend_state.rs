@@ -95,7 +95,7 @@ impl LinearUniformBuffer {
             let bytes_written = self
                 .write_head
                 .swap(0, std::sync::atomic::Ordering::Relaxed);
-            let alignment = 256; // TODO
+            let alignment = self.min_offset_alignment;
             let bytes_written_pad = (bytes_written + alignment - 1) & !(alignment - 1);
 
             let mapped_ranges = [vk::MappedMemoryRange {
@@ -823,9 +823,10 @@ impl VkBackendState {
                 let uniforms = LinearUniformBuffer::new(
                     1 << 20,
                     &vk.allocator,
-                    vk.device_properties
+                    (vk.device_properties
                         .limits
-                        .min_uniform_buffer_offset_alignment as usize,
+                        .min_uniform_buffer_offset_alignment as usize)
+                        .max(vk.device_properties.limits.non_coherent_atom_size as usize),
                 );
 
                 let submit_done_fence = unsafe {
