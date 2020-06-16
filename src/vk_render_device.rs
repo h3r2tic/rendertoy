@@ -72,7 +72,7 @@ impl VkRenderDevice {
 
             let mut layer_names = Vec::new();
             if graphics_debugging {
-                layer_names.push(CString::new("VK_LAYER_LUNARG_standard_validation").unwrap());
+                layer_names.push(CString::new("VK_LAYER_KHRONOS_validation").unwrap());
             }
 
             let layers_names_raw: Vec<*const i8> = layer_names
