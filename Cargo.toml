@@ -21,7 +21,7 @@ imgui = { git = "https://github.com/Gekkio/imgui-rs.git", rev = "ffff82d" }
 imgui-winit-support = { git = "https://github.com/Gekkio/imgui-rs.git", rev = "ffff82d", features = ["winit-19"] }
 lazy_static = "1.4"
 libflate = "1.0"
-nalgebra = { version = "0.18",  features = ["serde-serialize"] }
+glam = { version = "0.8.7", features = ["serde"] }
 notify = "4.0"
 petgraph = "0.4.13"
 regex = "1.3"
