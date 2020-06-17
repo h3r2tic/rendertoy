@@ -196,6 +196,8 @@ pub async fn load_gltf_scene_snoozy(
                             indices = (base_index..(base_index + positions.len() as u32)).collect();
                         }
 
+                        tracing::info!("Loading a mesh with {} indices", indices.len());
+
                         res.indices.append(&mut indices);
                         res.tangents.append(&mut tangents);
                         res.material_ids.append(&mut material_ids);
@@ -407,4 +409,20 @@ pub fn upload_raster_scene(
             )
         })
         .collect()
+}
+
+#[snoozy]
+pub async fn upload_dynamic_raster_scene_snoozy(
+    mut _ctx: Context,
+    scene: &Vec<(SnoozyRef<TriangleMesh>, Vector3, UnitQuaternion)>,
+) -> Result<ShaderUniformBundle> {
+    Ok(scene
+        .iter()
+        .map(|(mesh, position, rotation)| {
+            shader_uniform_bundle!(
+                instance_transform: raster_mesh_transform(*position, *rotation),
+                :upload_raster_mesh(make_raster_mesh(mesh.clone()))
+            )
+        })
+        .collect())
 }
