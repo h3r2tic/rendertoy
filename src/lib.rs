@@ -24,6 +24,7 @@ mod gpu_debugger;
 mod gpu_profiler;
 mod gui;
 mod keyboard;
+mod math;
 mod mesh;
 mod package;
 mod renderer;
@@ -51,25 +52,9 @@ pub use self::shader::*;
 pub use self::texture::*;
 pub use self::viewport::*;
 pub use ash::{vk, vk::Format};
-pub use nalgebra as na;
+pub use math::*;
 pub use snoozy::*;
 pub use warnings::rtoy_show_warning;
-
-pub type Point2 = na::Point2<f32>;
-pub type Vector2 = na::Vector2<f32>;
-
-pub type Point3 = na::Point3<f32>;
-pub type Vector3 = na::Vector3<f32>;
-
-pub type Point4 = na::Point4<f32>;
-pub type Vector4 = na::Vector4<f32>;
-
-pub type Matrix3 = na::Matrix3<f32>;
-pub type Matrix4 = na::Matrix4<f32>;
-pub type Isometry3 = na::Isometry3<f32>;
-
-pub type Quaternion = na::Quaternion<f32>;
-pub type UnitQuaternion = na::UnitQuaternion<f32>;
 
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;

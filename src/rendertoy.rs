@@ -5,7 +5,7 @@ use crate::keyboard::*;
 use crate::renderer::{RenderFrameStatus, Renderer};
 use crate::texture::{Texture, TextureKey};
 use crate::vulkan;
-use crate::{Point2, Vector2};
+use crate::Vec2;
 use ash::vk;
 use clap::ArgMatches;
 use imgui::im_str;
@@ -43,16 +43,16 @@ pub struct Rendertoy {
 
 #[derive(Clone)]
 pub struct MouseState {
-    pub pos: Point2,
-    pub delta: Vector2,
+    pub pos: Vec2,
+    pub delta: Vec2,
     pub button_mask: u32,
 }
 
 impl Default for MouseState {
     fn default() -> Self {
         Self {
-            pos: Point2::origin(),
-            delta: Vector2::zeros(),
+            pos: Vec2::zero(),
+            delta: Vec2::zero(),
             button_mask: 0,
         }
     }
@@ -272,7 +272,7 @@ impl Rendertoy {
                     } if !gui_want_capture_mouse => {
                         let dpi_factor = self.window.get_hidpi_factor();
                         let pos = logical_pos.to_physical(dpi_factor);
-                        new_mouse_state.pos = Point2::new(pos.x as f32, pos.y as f32);
+                        new_mouse_state.pos = Vec2::new(pos.x as f32, pos.y as f32);
                     }
                     winit::WindowEvent::MouseInput { state, button, .. }
                         if !gui_want_capture_mouse =>

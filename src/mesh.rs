@@ -27,12 +27,12 @@ pub struct TriangleMesh {
     pub maps: Vec<MeshMaterialMap>,   // global
 }
 
-fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Matrix4)>(
+fn iter_gltf_node_tree<F: FnMut(&gltf::scene::Node, Mat4)>(
     node: &gltf::scene::Node,
-    xform: Matrix4,
+    xform: Mat4,
     f: &mut F,
 ) {
-    let node_xform: Matrix4 = node.transform().matrix().into();
+    let node_xform = Mat4::from_cols_array_2d(&node.transform().matrix());
     let xform = xform * node_xform;
 
     f(&node, xform);
@@ -126,7 +126,7 @@ pub async fn load_gltf_scene_snoozy(
     if let Some(scene) = gltf.default_scene() {
         let mut res: TriangleMesh = TriangleMesh::default();
 
-        let mut process_node = |node: &gltf::scene::Node, xform: Matrix4| {
+        let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
             if let Some(mesh) = node.mesh() {
                 for prim in mesh.primitives() {
                     let reader = prim.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -204,18 +204,13 @@ pub async fn load_gltf_scene_snoozy(
                     }
 
                     for p in positions {
-                        let pos =
-                            Point3::from_homogeneous(xform * Point3::from(p).to_homogeneous())
-                                .unwrap();
-                        res.positions.push([pos.x, pos.y, pos.z]);
+                        let pos = (xform * Vec3::from(p).extend(1.0)).truncate();
+                        res.positions.push(pos.into());
                     }
 
                     for n in normals {
-                        let norm =
-                            Vector3::from_homogeneous(xform * Vector3::from(n).to_homogeneous())
-                                .unwrap()
-                                .normalize();
-                        res.normals.push([norm.x, norm.y, norm.z]);
+                        let norm = (xform * Vec3::from(n).extend(0.0)).truncate().normalize();
+                        res.normals.push(norm.into());
                     }
 
                     for c in colors {
@@ -227,7 +222,7 @@ pub async fn load_gltf_scene_snoozy(
             }
         };
 
-        let xform = Matrix4::new_scaling(*scale);
+        let xform = Mat4::from_scale(Vec3::splat(*scale));
         for node in scene.nodes() {
             iter_gltf_node_tree(&node, xform, &mut process_node);
         }
@@ -388,18 +383,17 @@ pub async fn upload_raster_mesh_snoozy(
     ))
 }
 
-pub fn raster_mesh_transform(offset: Vector3, rotation: UnitQuaternion) -> SnoozyRef<Buffer> {
-    let model_to_world: Matrix4 = {
-        let translation = Matrix4::new_translation(&Vector3::new(offset.x, offset.y, offset.z));
-        translation * rotation.to_homogeneous()
+pub fn raster_mesh_transform(offset: Vec3, rotation: Quat) -> SnoozyRef<Buffer> {
+    // TODO: fuse
+    let model_to_world: Mat4 = {
+        let translation = Mat4::from_translation(offset);
+        translation * Mat4::from_quat(rotation)
     };
 
     upload_buffer(model_to_world)
 }
 
-pub fn upload_raster_scene(
-    scene: &[(SnoozyRef<TriangleMesh>, Vector3, UnitQuaternion)],
-) -> ShaderUniformBundle {
+pub fn upload_raster_scene(scene: &[(SnoozyRef<TriangleMesh>, Vec3, Quat)]) -> ShaderUniformBundle {
     scene
         .iter()
         .map(|(mesh, position, rotation)| {
@@ -414,7 +408,7 @@ pub fn upload_raster_scene(
 #[snoozy]
 pub async fn upload_dynamic_raster_scene_snoozy(
     mut _ctx: Context,
-    scene: &Vec<(SnoozyRef<TriangleMesh>, Vector3, UnitQuaternion)>,
+    scene: &Vec<(SnoozyRef<TriangleMesh>, Vec3, Quat)>,
 ) -> Result<ShaderUniformBundle> {
     Ok(scene
         .iter()
