@@ -1,6 +1,6 @@
 lazy_static! {
     static ref RTOY_WARNINGS: std::sync::Mutex<Vec<String>> =
-        { std::sync::Mutex::new(Default::default()) };
+        std::sync::Mutex::new(Default::default());
 }
 
 pub fn rtoy_show_warning(text: String) {

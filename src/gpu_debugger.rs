@@ -46,5 +46,5 @@ impl GpuDebugger {
 }
 
 lazy_static! {
-    static ref GPU_DEBUGGER: Mutex<GpuDebugger> = { Mutex::new(GpuDebugger::new()) };
+    static ref GPU_DEBUGGER: Mutex<GpuDebugger> = Mutex::new(GpuDebugger::new());
 }

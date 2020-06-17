@@ -76,7 +76,7 @@ where
 }
 
 lazy_static! {
-    static ref TRANSIENT_RESOURCE_CACHE: Mutex<ShareMap> = { Mutex::new(TypeMap::custom()) };
+    static ref TRANSIENT_RESOURCE_CACHE: Mutex<ShareMap> = Mutex::new(TypeMap::custom());
 }
 
 pub fn create_transient<Res: TransientResource>(desc: Res::Desc) -> Res {

@@ -166,5 +166,5 @@ impl GpuProfiler {
 }
 
 lazy_static! {
-    static ref GPU_PROFILER: Mutex<GpuProfiler> = { Mutex::new(GpuProfiler::new()) };
+    static ref GPU_PROFILER: Mutex<GpuProfiler> = Mutex::new(GpuProfiler::new());
 }

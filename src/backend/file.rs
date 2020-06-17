@@ -50,7 +50,7 @@ impl FileWatcher {
 }
 
 lazy_static! {
-    static ref FILE_WATCHER: Mutex<FileWatcher> = { Mutex::new(FileWatcher::new()) };
+    static ref FILE_WATCHER: Mutex<FileWatcher> = Mutex::new(FileWatcher::new());
 }
 
 pub(crate) fn watch_file<F: Fn() + Sync + Send + 'static>(path: &str, callback: F) {

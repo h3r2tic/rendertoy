@@ -1157,5 +1157,5 @@ pub fn render_frame<F: FnOnce(&VkRenderDevice, usize, vk::Image, vk::ImageView)>
 
 lazy_static! {
     pub(crate) static ref VK_SETUP_COMMANDS: Mutex<Vec<Box<dyn FnOnce(&VkRenderDevice, &VkFrameData) + Send + 'static>>> =
-        { Mutex::new(Vec::new()) };
+        Mutex::new(Vec::new());
 }
