@@ -1554,7 +1554,7 @@ pub async fn compute_tex_snoozy(
             cb,
             (key.width + cs.local_size.0 - 1) / cs.local_size.0,
             (key.height + cs.local_size.1 - 1) / cs.local_size.1,
-            1,
+            (key.depth + cs.local_size.2 - 1) / cs.local_size.2,
         );
 
         vk.device.cmd_write_timestamp(

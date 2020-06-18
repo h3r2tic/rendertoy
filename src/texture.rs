@@ -110,11 +110,11 @@ pub fn load_tex_impl(
             .expect("unmap_memory");
     }
 
-    let res = backend::texture::create_texture(TextureKey {
-        width: image_dimensions.0,
-        height: image_dimensions.1,
-        format: internal_format.as_raw(),
-    });
+    let res = backend::texture::create_texture(TextureKey::new(
+        image_dimensions.0,
+        image_dimensions.1,
+        internal_format,
+    ));
 
     let res_image = res.image;
     vk_add_setup_command(move |_vk, vk_frame| {

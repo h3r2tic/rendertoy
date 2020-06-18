@@ -627,10 +627,6 @@ fn generate_dot_graph_from_snoozy_ref(
 
 impl TextureKey {
     pub fn fullscreen(rtoy: &Rendertoy, format: vk::Format) -> Self {
-        TextureKey {
-            width: rtoy.width(),
-            height: rtoy.height(),
-            format: format.as_raw(),
-        }
+        TextureKey::new(rtoy.width(), rtoy.height(), format)
     }
 }

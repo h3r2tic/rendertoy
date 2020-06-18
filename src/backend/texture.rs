@@ -3,10 +3,18 @@ use crate::{vk, vulkan::*};
 use ash::version::DeviceV1_0;
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
+pub enum TextureType {
+    Type2D,
+    Type3D,
+}
+
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Serialize, Debug)]
 pub struct TextureKey {
     pub width: u32,
     pub height: u32,
+    pub depth: u32,
     pub format: i32,
+    pub tex_type: TextureType,
 }
 
 impl TextureKey {
@@ -14,7 +22,19 @@ impl TextureKey {
         Self {
             width,
             height,
+            depth: 1,
             format: format.as_raw(),
+            tex_type: TextureType::Type2D,
+        }
+    }
+
+    pub fn new_3d(width: u32, height: u32, depth: u32, format: vk::Format) -> Self {
+        Self {
+            width,
+            height,
+            depth,
+            format: format.as_raw(),
+            tex_type: TextureType::Type3D,
         }
     }
 
@@ -22,6 +42,14 @@ impl TextureKey {
         let mut res = self.clone();
         res.width = (res.width + x - 1) / x;
         res.height = (res.height + y - 1) / y;
+        res
+    }
+
+    pub fn res_div_round_up_3d(&self, x: u32, y: u32, z: u32) -> Self {
+        let mut res = self.clone();
+        res.width = (res.width + x - 1) / x;
+        res.height = (res.height + y - 1) / y;
+        res.depth = (res.depth + z - 1) / z;
         res
     }
 
@@ -33,7 +61,7 @@ impl TextureKey {
     }
 
     pub fn half_res(&self) -> Self {
-        self.res_div_round_up(2, 2)
+        self.res_div_round_up_3d(2, 2, 2)
     }
 
     pub fn with_width(&self, v: u32) -> Self {
@@ -45,6 +73,12 @@ impl TextureKey {
     pub fn with_height(&self, v: u32) -> Self {
         let mut res = self.clone();
         res.height = v;
+        res
+    }
+
+    pub fn with_depth(&self, v: u32) -> Self {
+        let mut res = self.clone();
+        res.depth = v;
         res
     }
 
@@ -230,13 +264,16 @@ impl TransientResource for Texture {
         let mut img = ImageResource::new();
         let storage_format = get_storage_compatible_format(format);
         img.create_image(
-            vk::ImageType::TYPE_2D,
+            match key.tex_type {
+                TextureType::Type2D => vk::ImageType::TYPE_2D,
+                TextureType::Type3D => vk::ImageType::TYPE_3D,
+            },
             format,
             storage_format,
             vk::Extent3D::builder()
                 .width(key.width)
                 .height(key.height)
-                .depth(1)
+                .depth(key.depth)
                 .build(),
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::SAMPLED
@@ -246,7 +283,10 @@ impl TransientResource for Texture {
         );
 
         img.create_view(
-            vk::ImageViewType::TYPE_2D,
+            match key.tex_type {
+                TextureType::Type2D => vk::ImageViewType::TYPE_2D,
+                TextureType::Type3D => vk::ImageViewType::TYPE_3D,
+            },
             format,
             storage_format,
             vk::ImageUsageFlags::SAMPLED,
@@ -263,43 +303,5 @@ impl TransientResource for Texture {
         img.bindless_index = vk_state().register_image_bindless_index(img.view);
 
         img
-        /*unsafe {
-            let mut prev_bound_texture = 0;
-            gl.GetIntegerv(gl::TEXTURE_BINDING_2D, &mut prev_bound_texture);
-
-            let mut texture_id = 0;
-            gl.GenTextures(1, &mut texture_id);
-            gl.BindTexture(gl::TEXTURE_2D, texture_id);
-            gl.TexStorage2D(
-                gl::TEXTURE_2D,
-                1,
-                key.format,
-                key.width as i32,
-                key.height as i32,
-            );
-            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-            gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-
-            let mut sampler_id = 0;
-            gl.GenSamplers(1, &mut sampler_id);
-            gl.SamplerParameteri(sampler_id, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl.SamplerParameteri(sampler_id, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-            gl.SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-            gl.SamplerParameteri(sampler_id, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-
-            let bindless_handle = gl.GetTextureHandleARB(texture_id);
-            gl.MakeTextureHandleResidentARB(bindless_handle);
-
-            // Restore the previously bound texture
-            gl.BindTexture(gl::TEXTURE_2D, prev_bound_texture as u32);
-
-            TextureAllocation {
-                texture_id,
-                sampler_id,
-                bindless_handle,
-            }
-        }*/
     }
 }
