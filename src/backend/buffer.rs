@@ -58,7 +58,8 @@ impl TransientResource for Buffer {
                 | vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
-                | vk::BufferUsageFlags::INDEX_BUFFER;
+                | vk::BufferUsageFlags::INDEX_BUFFER
+                | vk::BufferUsageFlags::INDIRECT_BUFFER;
 
             let mem_info = vk_mem::AllocationCreateInfo {
                 usage: vk_mem::MemoryUsage::GpuOnly,

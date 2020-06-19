@@ -1,5 +1,5 @@
 use crate::blob::*;
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferKey};
 use crate::gpu_debugger;
 use crate::texture::{Texture, TextureKey};
 use crate::vulkan::*;
@@ -63,6 +63,7 @@ pub enum ResolvedShaderUniformValue {
     Buffer(Buffer),
     Bundle(ResolvedShaderUniformBundle),
     RwTexture(Texture),
+    RwBuffer(Buffer),
 }
 
 def_shader_uniform_types! {
@@ -1308,37 +1309,43 @@ fn update_descriptor_sets<'a>(
                             }
                         }
                         ReflectDescriptorType::StorageBuffer => {
-                            if let Some(ResolvedShaderUniformValue::Buffer(value)) =
-                                uniforms.get(&binding.type_description.as_ref().unwrap().type_name)
+                            match uniforms
+                                .get(&binding.type_description.as_ref().unwrap().type_name)
                             {
-                                let buffer_info = [vk::DescriptorBufferInfo::builder()
-                                    .buffer(value.buffer)
-                                    .range(vk::WHOLE_SIZE)
-                                    .build()];
-                                ds_buffer_info.push(buffer_info);
-                                let buffer_info = ds_buffer_info.last().unwrap();
+                                Some(ResolvedShaderUniformValue::Buffer(value))
+                                | Some(ResolvedShaderUniformValue::RwBuffer(value)) => {
+                                    let buffer_info = [vk::DescriptorBufferInfo::builder()
+                                        .buffer(value.buffer)
+                                        .range(vk::WHOLE_SIZE)
+                                        .build()];
+                                    ds_buffer_info.push(buffer_info);
+                                    let buffer_info = ds_buffer_info.last().unwrap();
 
-                                /*println!(
-                                    "Updating storage buffer at {}:{}",
-                                    binding.set, binding.binding
-                                );*/
+                                    /*println!(
+                                        "Updating storage buffer at {}:{}",
+                                        binding.set, binding.binding
+                                    );*/
 
-                                ds_writes.push(
-                                    vk::WriteDescriptorSet::builder()
-                                        .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
-                                        .dst_binding(binding.binding)
-                                        .dst_array_element(0)
-                                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                                        .buffer_info(buffer_info)
-                                        .build(),
-                                );
-                            } else {
-                                panic!(binding
-                                    .type_description
-                                    .as_ref()
-                                    .unwrap()
-                                    .type_name
-                                    .clone());
+                                    ds_writes.push(
+                                        vk::WriteDescriptorSet::builder()
+                                            .dst_set(
+                                                descriptor_sets.get_at_idx(binding.set as usize)?,
+                                            )
+                                            .dst_binding(binding.binding)
+                                            .dst_array_element(0)
+                                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                                            .buffer_info(buffer_info)
+                                            .build(),
+                                    );
+                                }
+                                _ => {
+                                    panic!(binding
+                                        .type_description
+                                        .as_ref()
+                                        .unwrap()
+                                        .type_name
+                                        .clone());
+                                }
                             }
                         }
                         ReflectDescriptorType::Sampler => {
@@ -1349,28 +1356,34 @@ fn update_descriptor_sets<'a>(
                             );*/
                         }
                         ReflectDescriptorType::UniformTexelBuffer => {
-                            if let Some(ResolvedShaderUniformValue::Buffer(value)) =
-                                uniforms.get(&binding.name)
-                            {
-                                ds_buffer_views.push([value.view]);
-                                let buffer_view = ds_buffer_views.last().unwrap();
+                            match uniforms.get(&binding.name) {
+                                Some(ResolvedShaderUniformValue::Buffer(value))
+                                | Some(ResolvedShaderUniformValue::RwBuffer(value)) => {
+                                    ds_buffer_views.push([value.view]);
+                                    let buffer_view = ds_buffer_views.last().unwrap();
 
-                                ds_writes.push(
-                                    vk::WriteDescriptorSet::builder()
-                                        .dst_set(descriptor_sets.get_at_idx(binding.set as usize)?)
-                                        .dst_binding(binding.binding)
-                                        .dst_array_element(0)
-                                        .descriptor_type(vk::DescriptorType::UNIFORM_TEXEL_BUFFER)
-                                        .texel_buffer_view(buffer_view)
-                                        .build(),
-                                );
-                            } else {
-                                if "all_buffers" == binding.name {
-                                    // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
-                                    all_buffers_descriptor_set_idx.push(binding.set as usize);
-                                } else {
-                                    // TODO
-                                    panic!("Could not find resource to bind {}", binding.name);
+                                    ds_writes.push(
+                                        vk::WriteDescriptorSet::builder()
+                                            .dst_set(
+                                                descriptor_sets.get_at_idx(binding.set as usize)?,
+                                            )
+                                            .dst_binding(binding.binding)
+                                            .dst_array_element(0)
+                                            .descriptor_type(
+                                                vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+                                            )
+                                            .texel_buffer_view(buffer_view)
+                                            .build(),
+                                    );
+                                }
+                                _ => {
+                                    if "all_buffers" == binding.name {
+                                        // Updated elsewhere. Do note the set idx so we can assign the descriptor set afterwards.
+                                        all_buffers_descriptor_set_idx.push(binding.set as usize);
+                                    } else {
+                                        // TODO
+                                        panic!("Could not find resource to bind {}", binding.name);
+                                    }
                                 }
                             }
                         }
@@ -1441,14 +1454,47 @@ impl TrackedUniformParamSource {
     }
 }
 
-async fn compute_tex_common(
+enum ComputeOutputResource {
+    Texture(Texture),
+    Buffer(Buffer),
+}
+
+struct ComputeOutput {
+    resource: ComputeOutputResource,
+    discard: bool,
+}
+
+impl ComputeOutput {
+    pub fn new_texture(tex: &Texture) -> Self {
+        Self {
+            resource: ComputeOutputResource::Texture(tex.clone()),
+            discard: true,
+        }
+    }
+
+    pub fn new_buffer(buf: &Buffer) -> Self {
+        Self {
+            resource: ComputeOutputResource::Buffer(buf.clone()),
+            discard: true,
+        }
+    }
+
+    pub fn mutate_texture(tex: &Texture) -> Self {
+        Self {
+            resource: ComputeOutputResource::Texture(tex.clone()),
+            discard: false,
+        }
+    }
+}
+
+async fn compute_common(
     mut ctx: Context,
-    key: &TextureKey,
+    thread_count: [u32; 3],
     cs: &SnoozyRef<ComputeShader>,
     uniforms: Vec<ResolvedShaderUniformHolder>,
-    output_tex: Texture,
-    discard_tex: bool,
-) -> Result<Texture> {
+    outputs: &[ComputeOutput],
+    indirect_args: Option<(Buffer, u64)>,
+) -> Result<()> {
     let cs = ctx.get(cs).await?;
     ctx.set_debug_name(&cs.name);
 
@@ -1502,27 +1548,36 @@ async fn compute_tex_common(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        if discard_tex {
-            record_image_barrier(
-                &vk.device,
-                cb,
-                ImageBarrier::new(
-                    output_tex.image,
-                    vk_sync::AccessType::Nothing,
-                    vk_sync::AccessType::ComputeShaderWrite,
-                )
-                .with_discard(true),
-            );
-        } else {
-            record_image_barrier(
-                &vk.device,
-                cb,
-                ImageBarrier::new(
-                    output_tex.image,
-                    vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-                    vk_sync::AccessType::ComputeShaderWrite,
-                ),
-            );
+        for output in outputs {
+            match &output.resource {
+                ComputeOutputResource::Texture(texture) => {
+                    if output.discard {
+                        record_image_barrier(
+                            &vk.device,
+                            cb,
+                            ImageBarrier::new(
+                                texture.image,
+                                vk_sync::AccessType::Nothing,
+                                vk_sync::AccessType::ComputeShaderWrite,
+                            )
+                            .with_discard(true),
+                        );
+                    } else {
+                        record_image_barrier(
+                            &vk.device,
+                            cb,
+                            ImageBarrier::new(
+                                texture.image,
+                                vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                                vk_sync::AccessType::ComputeShaderWrite,
+                            ),
+                        );
+                    }
+                }
+                ComputeOutputResource::Buffer(_) => {
+                    //todo!();
+                }
+            }
         }
 
         let mut descriptor_sets = descriptor_sets;
@@ -1558,12 +1613,17 @@ async fn compute_tex_common(
             vk_query_idx * 2 + 0,
         );
 
-        vk.device.cmd_dispatch(
-            cb,
-            (key.width + cs.local_size.0 - 1) / cs.local_size.0,
-            (key.height + cs.local_size.1 - 1) / cs.local_size.1,
-            (key.depth + cs.local_size.2 - 1) / cs.local_size.2,
-        );
+        if let Some((indirect_buf, indirect_off)) = indirect_args {
+            vk.device
+                .cmd_dispatch_indirect(cb, indirect_buf.buffer, indirect_off as u64);
+        } else {
+            vk.device.cmd_dispatch(
+                cb,
+                (thread_count[0] + cs.local_size.0 - 1) / cs.local_size.0,
+                (thread_count[1] + cs.local_size.1 - 1) / cs.local_size.1,
+                (thread_count[2] + cs.local_size.2 - 1) / cs.local_size.2,
+            );
+        }
 
         vk.device.cmd_write_timestamp(
             cb,
@@ -1572,21 +1632,47 @@ async fn compute_tex_common(
             vk_query_idx * 2 + 1,
         );
 
-        record_image_barrier(
-            &vk.device,
-            cb,
-            ImageBarrier::new(
-                output_tex.image,
-                vk_sync::AccessType::ComputeShaderWrite,
-                vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
-            ),
-        );
+        for output in outputs {
+            match &output.resource {
+                ComputeOutputResource::Texture(texture) => {
+                    record_image_barrier(
+                        &vk.device,
+                        cb,
+                        ImageBarrier::new(
+                            texture.image,
+                            vk_sync::AccessType::ComputeShaderWrite,
+                            vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                        ),
+                    );
+                }
+                ComputeOutputResource::Buffer(_) => {
+                    let global_barrier = vk_sync::GlobalBarrier {
+                        previous_accesses: &[vk_sync::AccessType::ComputeShaderWrite],
+                        next_accesses: &[vk_sync::AccessType::General],
+                    };
+
+                    vk_sync::cmd::pipeline_barrier(
+                        vk.device.fp_v1_0(),
+                        cb,
+                        Some(global_barrier),
+                        &[],
+                        &[],
+                    );
+                }
+            }
+        }
     }
 
     uniform_source.report_unreferenced_uniform_warnings(&cs.name);
-    gpu_debugger::report_texture(&cs.name, output_tex.view);
 
-    Ok(output_tex)
+    for output in outputs {
+        if let ComputeOutputResource::Texture(texture) = &output.resource {
+            gpu_debugger::report_texture(&cs.name, texture.view);
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 #[snoozy]
@@ -1607,7 +1693,49 @@ pub async fn compute_tex_snoozy(
         },
     });
 
-    compute_tex_common(ctx, key, cs, uniforms, output_tex, true).await
+    compute_common(
+        ctx,
+        [key.width, key.height, key.depth],
+        cs,
+        uniforms,
+        &[ComputeOutput::new_texture(&output_tex)],
+        None,
+    )
+    .await?;
+
+    Ok(output_tex)
+}
+
+#[snoozy]
+pub async fn compute_buf_snoozy(
+    ctx: Context,
+    key: &BufferKey,
+    thread_count: &[u32; 3],
+    cs: &SnoozyRef<ComputeShader>,
+    uniforms: &Vec<ShaderUniformHolder>,
+) -> Result<Buffer> {
+    let output_buf = crate::backend::buffer::create_buffer(*key);
+
+    let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
+    uniforms.push(ResolvedShaderUniformHolder {
+        name: "outputBuf".to_owned(),
+        payload: ResolvedShaderUniformPayload {
+            value: ResolvedShaderUniformValue::RwBuffer(output_buf.clone()),
+            warn_if_unreferenced: true,
+        },
+    });
+
+    compute_common(
+        ctx,
+        *thread_count,
+        cs,
+        uniforms,
+        &[ComputeOutput::new_buffer(&output_buf)],
+        None,
+    )
+    .await?;
+
+    Ok(output_buf)
 }
 
 #[snoozy]
@@ -1617,20 +1745,64 @@ pub async fn recompute_tex_snoozy(
     cs: &SnoozyRef<ComputeShader>,
     uniforms: &Vec<ShaderUniformHolder>,
 ) -> Result<Texture> {
-    let output_tex = ctx.get(output_tex).await?;
-    let output_tex = (*output_tex).clone();
+    let output_tex = (*ctx.get(output_tex).await?).clone();
 
     let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
     uniforms.push(ResolvedShaderUniformHolder {
         name: "outputTex".to_owned(),
         payload: ResolvedShaderUniformPayload {
             value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
-            warn_if_unreferenced: false,
+            warn_if_unreferenced: true,
         },
     });
 
     let key = output_tex.key;
-    compute_tex_common(ctx, &key, cs, uniforms, output_tex, true).await
+    compute_common(
+        ctx,
+        [key.width, key.height, key.depth],
+        cs,
+        uniforms,
+        &[ComputeOutput::mutate_texture(&output_tex)],
+        None,
+    )
+    .await?;
+
+    Ok(output_tex)
+}
+
+#[snoozy]
+pub async fn recompute_indirect_tex_snoozy(
+    mut ctx: Context,
+    output_tex: &SnoozyRef<Texture>,
+    cs: &SnoozyRef<ComputeShader>,
+    uniforms: &Vec<ShaderUniformHolder>,
+    indirect_buf: &SnoozyRef<Buffer>,
+    indirect_off: &u64,
+) -> Result<Texture> {
+    let output_tex = (*ctx.get(output_tex).await?).clone();
+    let indirect_buf = (*ctx.get(indirect_buf).await?).clone();
+
+    let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
+    uniforms.push(ResolvedShaderUniformHolder {
+        name: "outputTex".to_owned(),
+        payload: ResolvedShaderUniformPayload {
+            value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+            warn_if_unreferenced: true,
+        },
+    });
+
+    let key = output_tex.key;
+    compute_common(
+        ctx,
+        [key.width, key.height, key.depth],
+        cs,
+        uniforms,
+        &[ComputeOutput::mutate_texture(&output_tex)],
+        Some((indirect_buf, *indirect_off)),
+    )
+    .await?;
+
+    Ok(output_tex)
 }
 
 #[snoozy]

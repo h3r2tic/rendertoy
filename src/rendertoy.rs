@@ -367,7 +367,7 @@ impl Rendertoy {
                                         "Warnings ({})###warnings",
                                         warnings.len()
                                     ))
-                                    .default_open(false)
+                                    .default_open(true)
                                     .build()
                                 {
                                     warnings.sort();

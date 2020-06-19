@@ -1348,7 +1348,7 @@ dependencies = [
  "serde_derive 1.0.112 (registry+https://github.com/rust-lang/crates.io-index)",
  "shader-prepper 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "shaderc 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "snoozy 0.1.1 (git+https://github.com/h3r2tic/snoozy)",
+ "snoozy 0.1.1",
  "snoozy-macros 0.1.0 (git+https://github.com/h3r2tic/snoozy-macros)",
  "spirv-reflect 0.2.3 (git+https://github.com/h3r2tic/spirv-reflect-rs.git)",
  "spirv_headers 1.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1571,7 +1571,6 @@ dependencies = [
 [[package]]
 name = "snoozy"
 version = "0.1.1"
-source = "git+https://github.com/h3r2tic/snoozy#47d9b763beff1705459567c7d0b4423b76ecb639"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-trait 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1583,6 +1582,7 @@ dependencies = [
  "pretty-bytes 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.112 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.112 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "tracing 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "twox-hash 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2198,7 +2198,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum smallvec 0.6.13 (registry+https://github.com/rust-lang/crates.io-index)" = "f7b0758c52e15a8b5e3691eae6cc559f08eee9406e548a4477ba4e67770a82b6"
 "checksum smallvec 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c7cb5678e1615754284ec264d9bb5b4c27d2018577fd90ac0ceb578591ed5ee4"
 "checksum smithay-client-toolkit 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)" = "2ccb8c57049b2a34d2cc2b203fa785020ba0129d31920ef0d317430adaf748fa"
-"checksum snoozy 0.1.1 (git+https://github.com/h3r2tic/snoozy)" = "<none>"
 "checksum snoozy-macros 0.1.0 (git+https://github.com/h3r2tic/snoozy-macros)" = "<none>"
 "checksum spirv-reflect 0.2.3 (git+https://github.com/h3r2tic/spirv-reflect-rs.git)" = "<none>"
 "checksum spirv_headers 1.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "3f1418983d16481227ffa3ab3cf44ef92eebc9a76c092fbcd4c51a64ff032622"

@@ -50,3 +50,6 @@ winit = "=0.19.5"
 ash = { git = "https://github.com/MaikKlein/ash.git", rev = "0b68927" }
 spirv-reflect = { git = "https://github.com/h3r2tic/spirv-reflect-rs.git" }  # Fixed a crash
 vk-mem = { git = "https://github.com/h3r2tic/vk-mem-rs.git" }  # Forked for static CRT on Windows
+
+[patch."https://github.com/h3r2tic/snoozy"]
+snoozy = { path = "../snoozy" }
