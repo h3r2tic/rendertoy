@@ -1441,25 +1441,16 @@ impl TrackedUniformParamSource {
     }
 }
 
-#[snoozy]
-pub async fn compute_tex_snoozy(
+async fn compute_tex_common(
     mut ctx: Context,
     key: &TextureKey,
     cs: &SnoozyRef<ComputeShader>,
-    uniforms: &Vec<ShaderUniformHolder>,
+    uniforms: Vec<ResolvedShaderUniformHolder>,
+    output_tex: Texture,
+    discard_tex: bool,
 ) -> Result<Texture> {
-    let output_tex = crate::backend::texture::create_texture(*key);
     let cs = ctx.get(cs).await?;
     ctx.set_debug_name(&cs.name);
-
-    let mut uniforms = resolve(ctx, uniforms.clone()).await?;
-    uniforms.push(ResolvedShaderUniformHolder {
-        name: "outputTex".to_owned(),
-        payload: ResolvedShaderUniformPayload {
-            value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
-            warn_if_unreferenced: true,
-        },
-    });
 
     let (vk, vk_state) = vk_all();
     let vk_frame = vk_state.current_frame();
@@ -1511,16 +1502,28 @@ pub async fn compute_tex_snoozy(
     let cb: vk::CommandBuffer = cb.cb;
 
     unsafe {
-        record_image_barrier(
-            &vk.device,
-            cb,
-            ImageBarrier::new(
-                output_tex.image,
-                vk_sync::AccessType::Nothing,
-                vk_sync::AccessType::ComputeShaderWrite,
-            )
-            .with_discard(true),
-        );
+        if discard_tex {
+            record_image_barrier(
+                &vk.device,
+                cb,
+                ImageBarrier::new(
+                    output_tex.image,
+                    vk_sync::AccessType::Nothing,
+                    vk_sync::AccessType::ComputeShaderWrite,
+                )
+                .with_discard(true),
+            );
+        } else {
+            record_image_barrier(
+                &vk.device,
+                cb,
+                ImageBarrier::new(
+                    output_tex.image,
+                    vk_sync::AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer,
+                    vk_sync::AccessType::ComputeShaderWrite,
+                ),
+            );
+        }
 
         let mut descriptor_sets = descriptor_sets;
 
@@ -1584,6 +1587,50 @@ pub async fn compute_tex_snoozy(
     gpu_debugger::report_texture(&cs.name, output_tex.view);
 
     Ok(output_tex)
+}
+
+#[snoozy]
+pub async fn compute_tex_snoozy(
+    ctx: Context,
+    key: &TextureKey,
+    cs: &SnoozyRef<ComputeShader>,
+    uniforms: &Vec<ShaderUniformHolder>,
+) -> Result<Texture> {
+    let output_tex = crate::backend::texture::create_texture(*key);
+
+    let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
+    uniforms.push(ResolvedShaderUniformHolder {
+        name: "outputTex".to_owned(),
+        payload: ResolvedShaderUniformPayload {
+            value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+            warn_if_unreferenced: true,
+        },
+    });
+
+    compute_tex_common(ctx, key, cs, uniforms, output_tex, true).await
+}
+
+#[snoozy]
+pub async fn recompute_tex_snoozy(
+    mut ctx: Context,
+    output_tex: &SnoozyRef<Texture>,
+    cs: &SnoozyRef<ComputeShader>,
+    uniforms: &Vec<ShaderUniformHolder>,
+) -> Result<Texture> {
+    let output_tex = ctx.get(output_tex).await?;
+    let output_tex = (*output_tex).clone();
+
+    let mut uniforms = resolve(ctx.clone(), uniforms.clone()).await?;
+    uniforms.push(ResolvedShaderUniformHolder {
+        name: "outputTex".to_owned(),
+        payload: ResolvedShaderUniformPayload {
+            value: ResolvedShaderUniformValue::RwTexture(output_tex.clone()),
+            warn_if_unreferenced: false,
+        },
+    });
+
+    let key = output_tex.key;
+    compute_tex_common(ctx, &key, cs, uniforms, output_tex, true).await
 }
 
 #[snoozy]
