@@ -14,6 +14,7 @@ bincode = "1.2"
 cargo_metadata = "0.10"
 clap = "2.33"
 failure = "0.1"
+futures = "0.3.5"
 gltf = "0.15"
 hdrldr = "0.1.2"
 image = { version = "0.22", default-features = false, features = ["gif_codec", "jpeg", "ico", "png_codec", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt"] }

@@ -479,7 +479,12 @@ fn generate_descriptor_set_layouts(
                     &mut binding_flags,
                 ),
                 ReflectDescriptorType::Sampler => {
-                    immutable_samplers.push(vk.samplers[crate::vulkan::SAMPLER_LINEAR]);
+                    let sampler_index = match binding.name.as_str() {
+                        "linear_sampler" => crate::vulkan::SAMPLER_LINEAR,
+                        "linear_clamp_sampler" => crate::vulkan::SAMPLER_LINEAR_CLAMP,
+                        _ => return Err("Unrecognized sampler name"), // TODO: better error
+                    };
+                    immutable_samplers.push(vk.samplers[sampler_index]);
                     binding_flags.push(vk::DescriptorBindingFlagsEXT::empty());
                     bindings.push(
                         vk::DescriptorSetLayoutBinding::builder()

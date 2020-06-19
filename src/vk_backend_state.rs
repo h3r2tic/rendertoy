@@ -304,6 +304,7 @@ impl Drop for VkFrameData {
 }
 
 pub const SAMPLER_LINEAR: usize = 0;
+pub const SAMPLER_LINEAR_CLAMP: usize = 1;
 
 pub struct VkBackendState {
     pub swapchain: Option<VkSwapchain>,
@@ -715,12 +716,32 @@ impl VkBackendState {
         })
     }
 
-    pub fn end_frame(&self, begin_frame_state: BeginFrameState) {
+    pub fn get_begin_frame_state(&self) -> BeginFrameState {
+        let present_index = self.current_frame_data_idx.unwrap();
+
+        let (wait_semaphore, signal_semaphore) = {
+            let swapchain = self.swapchain.as_ref().unwrap();
+
+            (
+                swapchain.swapchain_acquired_semaphores[self.swapchain_acquired_semaphore_idx],
+                swapchain.rendering_complete_semaphores[present_index],
+            )
+        };
+
+        BeginFrameState {
+            present_index,
+            wait_semaphore,
+            signal_semaphore,
+        }
+    }
+
+    pub fn end_frame(&self) {
+        let present_index = self.current_frame_data_idx.unwrap();
+
         let swapchain = self.swapchain.as_ref().unwrap();
-        let wait_semaphores =
-            [swapchain.rendering_complete_semaphores[begin_frame_state.present_index]];
+        let wait_semaphores = [swapchain.rendering_complete_semaphores[present_index]];
         let swapchains = [swapchain.swapchain];
-        let image_indices = [begin_frame_state.present_index as u32];
+        let image_indices = [present_index as u32];
         let present_info = vk::PresentInfoKHR::builder()
             .wait_semaphores(&wait_semaphores)
             .swapchains(&swapchains)
@@ -1033,14 +1054,10 @@ impl Drop for VkBackendState {
     }
 }
 
-pub fn render_frame<F: FnOnce(&VkRenderDevice, usize, vk::Image, vk::ImageView)>(
+pub fn begin_render_frame<F: FnOnce(&VkRenderDevice, usize, vk::Image, vk::ImageView)>(
     begin_frame_state: &BeginFrameState,
     render_fn: F,
 ) {
-    let wait_mask: &[vk::PipelineStageFlags] = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-    let wait_semaphores: &[vk::Semaphore] = &[begin_frame_state.wait_semaphore];
-    let signal_semaphores: &[vk::Semaphore] = &[begin_frame_state.signal_semaphore];
-
     unsafe {
         with_vk_state_mut(|vk_state| {
             let vk = vk();
@@ -1119,7 +1136,15 @@ pub fn render_frame<F: FnOnce(&VkRenderDevice, usize, vk::Image, vk::ImageView)>
                 swapchain.present_image_views[begin_frame_state.present_index],
             );
         }
+    }
+}
 
+pub fn end_render_frame(begin_frame_state: &BeginFrameState) {
+    let wait_mask: &[vk::PipelineStageFlags] = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+    let wait_semaphores: &[vk::Semaphore] = &[begin_frame_state.wait_semaphore];
+    let signal_semaphores: &[vk::Semaphore] = &[begin_frame_state.signal_semaphore];
+
+    unsafe {
         with_vk_state_mut(|vk| {
             vk.unmap_uniforms();
         });

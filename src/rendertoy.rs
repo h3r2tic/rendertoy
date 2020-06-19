@@ -11,11 +11,11 @@ use clap::ArgMatches;
 use imgui::im_str;
 use snoozy::{get_snapshot, OpaqueSnoozyRef, Result, SnoozyRef};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
 struct RendertoyState {
-    rt: Runtime,
+    rt: Arc<Mutex<Runtime>>,
     mouse_state: MouseState,
     cfg: RendertoyConfig,
     keyboard: KeyboardState,
@@ -130,8 +130,9 @@ impl RendertoyConfig {
 
 impl Rendertoy {
     pub fn new_with_config(cfg: RendertoyConfig) -> Self {
-        let rt = Runtime::new().unwrap();
+        let rt = Arc::new(Mutex::new(Runtime::new().unwrap()));
         tracing_subscriber::fmt::init();
+        snoozy::initialize_runtime(rt.clone());
 
         let events_loop = winit::EventsLoop::new();
 
@@ -145,7 +146,7 @@ impl Rendertoy {
             .expect("window");
         let window = Arc::new(window);
 
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             window.clone(),
             cfg.graphics_debugging,
             cfg.vsync,
@@ -164,6 +165,8 @@ impl Rendertoy {
             crate::texture::load_tex_impl(&texel_value, image_dimensions, internal_format)
                 .expect("gui placeholder texture")
         };
+
+        renderer.begin_setup_frame();
 
         Rendertoy {
             state: RendertoyState {
@@ -305,6 +308,8 @@ impl Rendertoy {
     pub fn draw_forever(mut self, mut callback: impl FnMut(&FrameState) -> SnoozyRef<Texture>) {
         tracing::debug!("Rendertoy::draw_forever");
 
+        self.renderer.end_setup_frame();
+
         let mut running = true;
         while running {
             let window_size_pixels = {
@@ -443,7 +448,7 @@ impl RendertoyState {
 
         let final_texture = {
             let tex = tex.clone();
-            self.rt.block_on(async move {
+            self.rt.try_lock().unwrap().block_on(async move {
                 let snapshot = get_snapshot(move |f| {
                     tokio::task::spawn(async move {
                         f();

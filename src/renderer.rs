@@ -39,6 +39,53 @@ impl Renderer {
         }
     }
 
+    pub fn begin_setup_frame(&mut self) -> RenderFrameStatus {
+        // The swapchain was lost -- possibly due to the window being minimized.
+        // See if we can re-create it.
+        if vk_state().swapchain.is_none() {
+            return self.resize();
+        }
+
+        let fs = with_vk_state_mut(VkBackendState::begin_frame);
+        let fs = match fs {
+            Ok(s) => s,
+            Err(BeginFrameErr::RecreateFramebuffer) => {
+                return self.resize();
+            }
+        };
+
+        crate::vulkan::begin_render_frame(
+            &fs,
+            |vk, _present_index, present_image, _present_image_view| {
+                let cb = vk_state().current_frame().command_buffer.lock().unwrap().cb;
+                record_image_barrier(
+                    &vk.device,
+                    cb,
+                    ImageBarrier::new(
+                        present_image,
+                        vk_sync::AccessType::Nothing,
+                        vk_sync::AccessType::Present,
+                    ),
+                );
+            },
+        );
+
+        RenderFrameStatus::Ok
+    }
+
+    pub fn end_setup_frame(&mut self) -> RenderFrameStatus {
+        let fs = vk_state().get_begin_frame_state();
+
+        crate::vulkan::end_render_frame(&fs);
+        vk_state().end_frame();
+
+        gpu_profiler::end_frame();
+        gpu_debugger::end_frame();
+
+        self.gpu_profiler_stats = Some(gpu_profiler::get_stats());
+        RenderFrameStatus::Ok
+    }
+
     pub fn render_frame(
         &mut self,
         mut callback: impl FnMut(&Self) -> (vk::ImageView, vk::ImageView),
@@ -57,7 +104,7 @@ impl Renderer {
             }
         };
 
-        crate::vulkan::render_frame(
+        crate::vulkan::begin_render_frame(
             &fs,
             |vk, present_index, present_image, present_image_view| {
                 record_image_barrier(
@@ -160,7 +207,9 @@ impl Renderer {
             },
         );
 
-        vk_state().end_frame(fs);
+        crate::vulkan::end_render_frame(&fs);
+
+        vk_state().end_frame();
 
         gpu_profiler::end_frame();
         gpu_debugger::end_frame();

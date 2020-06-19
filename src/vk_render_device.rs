@@ -52,7 +52,7 @@ pub struct VkRenderDevice {
     pub surface_format: vk::SurfaceFormatKHR,
 
     pub allocator: vk_mem::Allocator,
-    pub samplers: [vk::Sampler; 1], // immutable
+    pub samplers: [vk::Sampler; 2], // immutable
 }
 
 impl VkRenderDevice {
@@ -247,19 +247,41 @@ impl VkRenderDevice {
 
             let swapchain_loader = Swapchain::new(&instance, &device);
 
-            let sampler_info = vk::SamplerCreateInfo {
-                mag_filter: vk::Filter::LINEAR,
-                min_filter: vk::Filter::LINEAR,
-                mipmap_mode: vk::SamplerMipmapMode::LINEAR,
-                address_mode_u: vk::SamplerAddressMode::REPEAT,
-                address_mode_v: vk::SamplerAddressMode::REPEAT,
-                address_mode_w: vk::SamplerAddressMode::REPEAT,
-                max_anisotropy: 1.0,
-                border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
-                compare_op: vk::CompareOp::NEVER,
-                ..Default::default()
-            };
-            let sampler = device.create_sampler(&sampler_info, None).unwrap();
+            let sampler_linear = device
+                .create_sampler(
+                    &vk::SamplerCreateInfo {
+                        mag_filter: vk::Filter::LINEAR,
+                        min_filter: vk::Filter::LINEAR,
+                        mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+                        address_mode_u: vk::SamplerAddressMode::REPEAT,
+                        address_mode_v: vk::SamplerAddressMode::REPEAT,
+                        address_mode_w: vk::SamplerAddressMode::REPEAT,
+                        max_anisotropy: 1.0,
+                        border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+                        compare_op: vk::CompareOp::NEVER,
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap();
+
+            let sampler_linear_clamp = device
+                .create_sampler(
+                    &vk::SamplerCreateInfo {
+                        mag_filter: vk::Filter::LINEAR,
+                        min_filter: vk::Filter::LINEAR,
+                        mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+                        address_mode_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                        address_mode_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                        address_mode_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                        max_anisotropy: 1.0,
+                        border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+                        compare_op: vk::CompareOp::NEVER,
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap();
 
             Ok(Self {
                 entry,
@@ -274,7 +296,7 @@ impl VkRenderDevice {
                 present_queue,
                 swapchain_loader,
                 allocator,
-                samplers: [sampler],
+                samplers: [sampler_linear, sampler_linear_clamp],
                 debug_call_back,
                 debug_report_loader,
                 surface,
