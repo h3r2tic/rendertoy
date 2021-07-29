@@ -33,7 +33,7 @@ serde = "1.0"
 serde_derive = "1.0"
 shader-prepper = "0.2"
 shaderc = "0.6.2"
-snoozy = { git = "https://github.com/h3r2tic/snoozy" }
+snoozy = { git = "https://github.com/h3r2tic/snoozy", rev = "8d6b11dc6b05765decb67a0614a76c1d6fce0740" }
 snoozy-macros = { git = "https://github.com/h3r2tic/snoozy-macros" }
 spirv_headers = "=1.4.2"
 spirv-reflect = "0.2.3"
