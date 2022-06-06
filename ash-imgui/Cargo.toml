@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-ash = "0.29.0"
+ash = "0.33.1"
 imgui = { git = "https://github.com/Gekkio/imgui-rs.git", rev = "ffff82d" }
 arrayvec = "0.5.1"
 memoffset = "0.5"
